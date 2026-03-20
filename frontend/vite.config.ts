@@ -18,7 +18,7 @@ export default defineConfig({
     commonjsOptions: {
       include: [/msgpackr/, /node_modules/]
     }
-  }
+  },
   server: {
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
