@@ -16,22 +16,16 @@ export default defineConfig({
     }),
   ],
 
-  // ✅ VERY IMPORTANT for WASM (bb.js + noir)
+  // ✅ REQUIRED for bb.js + noir WASM
   assetsInclude: ["**/*.wasm"],
 
   optimizeDeps: {
-    // ❗ Prevent Vite from breaking bb.js + WASM
-    exclude: ["garaga", "@aztec/bb.js"],
-    esbuildOptions: {
-      conditions: ["browser"],
-    },
+    // ✅ Prevent Vite from breaking bb.js
+    exclude: ["@aztec/bb.js"],
   },
 
   build: {
     target: "esnext",
-
-    // ✅ Fix large ZK bundles + chunking
-    chunkSizeWarningLimit: 2000,
 
     rollupOptions: {
       input: {
@@ -39,36 +33,16 @@ export default defineConfig({
         proof: path.resolve(__dirname, "proof.html"),
         report: path.resolve(__dirname, "report.html"),
       },
-
-      output: {
-        manualChunks: {
-          // ✅ Split heavy ZK stack
-          bb: ["@aztec/bb.js"],
-          noir: ["@noir-lang/noir_js"],
-        },
-      },
-    },
-  },
-
-  server: {
-    headers: {
-      // ✅ Needed if you ever enable threads (SharedArrayBuffer)
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "require-corp",
     },
   },
 
   resolve: {
-    conditions: ["browser", "module", "import", "default"],
     alias: {
-      // ✅ Force browser build of bb.js
+      // ✅ Force browser build of bb.js (CRITICAL)
       "@aztec/bb.js": path.resolve(
         __dirname,
         "node_modules/@aztec/bb.js/dest/browser/index.js"
       ),
-
-      // ✅ Fix pino (used internally)
-      pino: "pino/browser.js",
     },
   },
 });
