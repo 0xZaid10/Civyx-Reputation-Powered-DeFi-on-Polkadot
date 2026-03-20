@@ -1,0 +1,6 @@
+[package]
+name = "identity"
+type = "bin"
+authors = [""]
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "wallet"
+type = "bin"
+authors = [""]
+
+[dependencies]
