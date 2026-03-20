@@ -14,6 +14,11 @@ export default defineConfig({
     include: ["msgpackr"],
     exclude: ['@noir-lang/noir_js', '@aztec/bb.js'],
   },
+  build: {
+    commonjsOptions: {
+      include: [/msgpackr/, /node_modules/]
+    }
+  }
   server: {
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
