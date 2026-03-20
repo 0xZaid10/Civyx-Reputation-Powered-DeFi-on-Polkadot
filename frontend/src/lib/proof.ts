@@ -1,10 +1,4 @@
-// Civyx — ZK Proof Generation
-// Runs Noir circuits in the browser using noir_js + bb.js.
-//
-// Key architecture (bb.js 3.0.0-nightly.20260102):
-//   UltraHonkBackend(bytecode, api) — api must be passed in explicitly
-//   api = AsyncApi(bar.backend)     — wraps BarretenbergWasmAsyncBackend
-//   bar = Barretenberg.new(1)       — initializes WASM backend
+// Civyx — ZK Proof Generation 
 
 export type ProofStep = 'idle' | 'loading' | 'preparing' | 'proving' | 'done' | 'error';
 
@@ -33,15 +27,6 @@ async function loadCircuit(path: string): Promise<any> {
   return res.json();
 }
 
-// Load AsyncApi — the msgpack wrapper that gives the WASM backend named methods
-async function getAsyncApi(backend: any): Promise<any> {
-  const cbind = await import(/* @vite-ignore */ new URL(
-    '../../node_modules/@aztec/bb.js/dest/browser/cbind/generated/async.js',
-    import.meta.url
-  ).href);
-  return new cbind.AsyncApi(backend);
-}
-
 // ── Core proof generation helper ──────────────────────────────────────────────
 
 async function generateProof(
@@ -58,51 +43,37 @@ async function generateProof(
     import('@aztec/bb.js'),
     loadCircuit(circuitPath),
   ]);
-  console.log('[proof] Circuit loaded, bytecode length:', circuit.bytecode?.length);
 
   onProgress({ step: 'loading', pct: 20, label: 'Preparing...' });
 
   console.log('[proof] Initializing Barretenberg WASM...');
   const bar = await Barretenberg.new(1);
-  console.log('[proof] WASM backend type:', bar.backend?.constructor?.name);
-
-  const api = await getAsyncApi(bar.backend);
-  console.log('[proof] AsyncApi ready');
 
   onProgress({ step: 'preparing', pct: 35, label: 'Preparing...' });
 
-  const backend = new UltraHonkBackend(circuit.bytecode, api);
+  // ✅ FIX: pass bar directly (NO AsyncApi, NO internal imports)
+  const backend = new UltraHonkBackend(circuit.bytecode, bar);
   const noir    = new Noir(circuit);
 
-  // noir.init() is required in beta.18 before execute()
   console.log('[proof] Initializing Noir...');
   await noir.init();
 
-  console.log('[proof] Executing circuit with inputs:', Object.fromEntries(
-    Object.entries(inputs).map(([k, v]) => [k, v.slice(0, 10) + '...'])
-  ));
+  console.log('[proof] Executing circuit...');
   onProgress({ step: 'proving', pct: 50, label: 'Generating proof...' });
 
   const { witness } = await noir.execute(inputs);
-  console.log('[proof] Witness generated, length:', witness?.length ?? witness?.byteLength);
 
   onProgress({ step: 'proving', pct: 75, label: 'Generating proof...' });
 
-  console.log('[proof] Generating UltraHonk proof...');
-  // Use keccak:true for EVM-compatible proofs (equivalent to -t evm in bb CLI)
+  console.log('[proof] Generating proof...');
   const result = await backend.generateProof(witness, { keccak: true });
-  console.log('[proof] Proof generated! proof.length:', result.proof?.length);
-  console.log('[proof] publicInputs count:', result.publicInputs?.length);
-  console.log('[proof] publicInputs:', result.publicInputs);
 
   onProgress({ step: 'done', pct: 100, label: 'Done' });
 
-  // proof is Uint8Array → hex
   const proofHex = ('0x' + Array.from(result.proof as Uint8Array)
     .map((b: number) => b.toString(16).padStart(2, '0'))
     .join('')) as `0x${string}`;
 
-  // publicInputs are already hex strings from bb.js (3 items for wallet_link)
   return {
     proof:        proofHex,
     publicInputs: result.publicInputs as string[],
@@ -111,10 +82,6 @@ async function generateProof(
 
 // ── Wallet Link Proof ─────────────────────────────────────────────────────────
 
-/**
- * Proves: pedersen_hash([secret]) == commitment
- *         pedersen_hash([secret, wallet_address]) == nullifier
- */
 export async function generateWalletLinkProof(
   secret:        string,
   commitment:    string,
@@ -133,10 +100,6 @@ export async function generateWalletLinkProof(
 
 // ── Nullifier Proof ───────────────────────────────────────────────────────────
 
-/**
- * Proves: pedersen_hash([secret]) == commitment
- *         pedersen_hash([secret, action_id]) == nullifier
- */
 export async function generateNullifierProof(
   secret:      string,
   commitment:  string,
@@ -155,9 +118,6 @@ export async function generateNullifierProof(
 
 // ── Identity Proof ────────────────────────────────────────────────────────────
 
-/**
- * Proves: pedersen_hash([secret]) == commitment
- */
 export async function generateIdentityProof(
   secret:      string,
   commitment:  string,
