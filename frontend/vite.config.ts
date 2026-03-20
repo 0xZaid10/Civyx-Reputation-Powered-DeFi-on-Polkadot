@@ -16,7 +16,7 @@ export default defineConfig({
     }),
   ],
 
-  // ✅ REQUIRED for bb.js + noir WASM
+  // ✅ Required for Noir + bb.js WASM
   assetsInclude: ["**/*.wasm"],
 
   optimizeDeps: {
@@ -26,19 +26,11 @@ export default defineConfig({
 
   build: {
     target: "esnext",
-
-    rollupOptions: {
-      input: {
-        main: path.resolve(__dirname, "index.html"),
-        proof: path.resolve(__dirname, "proof.html"),
-        report: path.resolve(__dirname, "report.html"),
-      },
-    },
   },
 
   resolve: {
     alias: {
-      // ✅ Force browser build of bb.js (CRITICAL)
+      // ✅ Force browser version of bb.js
       "@aztec/bb.js": path.resolve(
         __dirname,
         "node_modules/@aztec/bb.js/dest/browser/index.js"
