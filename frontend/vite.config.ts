@@ -17,6 +17,10 @@ export default defineConfig({
 
   resolve: {
     alias: {
+      // ✅ THIS FIXES YOUR ERROR
+      "@": path.resolve(__dirname, "src"),
+
+      // ✅ bb.js browser fix
       "@aztec/bb.js": path.resolve(
         __dirname,
         "node_modules/@aztec/bb.js/dest/browser/index.js"
