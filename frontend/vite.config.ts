@@ -11,6 +11,7 @@ export default defineConfig({
     global: 'globalThis',
   },
   optimizeDeps: {
+    include: ["msgpackr"]
     exclude: ['@noir-lang/noir_js', '@aztec/bb.js'],
   },
   server: {
