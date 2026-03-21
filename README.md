@@ -31,7 +31,12 @@
 ### Technical Reference
 19. [Technology Stack](#19-technology-stack)
 20. [OpenZeppelin Integration — Core Infrastructure](#20-openzeppelin-integration--core-infrastructure)
-21. [ZK Circuit Architecture](#20-zk-circuit-architecture)22. [Contract-by-Contract Reference](#21-contract-by-contract-technical-reference)23. [Security Model](#22-security-model)24. [Test Coverage](#23-test-coverage)25. [Hardhat Configuration](#24-hardhat-configuration)26. [Development Commands](#25-development-commands)27. [Extending the System](#26-extending-the-system)
+21. [ZK Circuit Architecture](#20-zk-circuit-architecture)
+22. [Contract-by-Contract Reference](#21-contract-by-contract-technical-reference)
+23. [Security Model](#22-security-model)
+24. [Test Coverage](#23-test-coverage)
+25. [Hardhat Configuration](#24-hardhat-configuration)
+26. [Development Commands](#25-development-commands)
 ---
 
 ## 1. What is Civyx?
