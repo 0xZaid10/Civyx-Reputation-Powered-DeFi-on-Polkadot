@@ -30,14 +30,8 @@
 
 ### Technical Reference
 19. [Technology Stack](#19-technology-stack)
-20. [ZK Circuit Architecture](#20-zk-circuit-architecture)
-21. [Contract-by-Contract Reference](#21-contract-by-contract-technical-reference)
-22. [Security Model](#22-security-model)
-23. [Test Coverage](#23-test-coverage)
-24. [Hardhat Configuration](#24-hardhat-configuration)
-25. [Development Commands](#25-development-commands)
-26. [Extending the System](#26-extending-the-system)
-
+20. [OpenZeppelin Integration — Core Infrastructure](#20-openzeppelin-integration--core-infrastructure)
+21. [ZK Circuit Architecture](#20-zk-circuit-architecture)22. [Contract-by-Contract Reference](#21-contract-by-contract-technical-reference)23. [Security Model](#22-security-model)24. [Test Coverage](#23-test-coverage)25. [Hardhat Configuration](#24-hardhat-configuration)26. [Development Commands](#25-development-commands)27. [Extending the System](#26-extending-the-system)
 ---
 
 ## 1. What is Civyx?
@@ -667,8 +661,376 @@ externalTaskVerifier.registerSchema(
 
 ---
 
-## 20. ZK Circuit Architecture
+## 20. OpenZeppelin Integration — Core Infrastructure
 
+OpenZeppelin v5 is not a convenience import in Civyx — it is the structural skeleton of the entire smart contract system. Every contract in the project inherits at least one OZ module. Without OpenZeppelin, the permission system, reentrancy protection, emergency controls, token standard, and cryptographic verification would all need to be written, tested, and audited from scratch. Instead, Civyx stands on the most battle-tested smart contract library in existence.
+
+**6 modules · 17 contracts · every single one uses at least two**
+
+---
+
+### 20.1 AccessControl — The Permission Architecture
+
+**Contracts using it:** IdentityRegistry · ReputationRegistry · OrganizerRegistry · TrustOracle · TaskRewardDispenser · GovernanceVoteTask · AirdropClaimTask · ExternalTaskVerifier
+
+**Why it is a core function, not a utility:**
+
+In Civyx, permission is not binary (owner / not-owner). The protocol has multiple distinct actors that each need exactly defined capabilities — and nothing beyond them. OpenZeppelin's `AccessControl` provides this through role-based permission: every role is a `bytes32` hash, granted and revoked independently, verifiable on-chain.
+
+The alternative — a single `onlyOwner` modifier — would mean a compromised admin key can do everything: register schemas, award reputation, modify organizers, pause every contract. With AccessControl, each role is scoped to exactly one capability. Compromising `SCHEMA_MANAGER` only allows schema registration. It cannot touch reputation, stakes, or any other system.
+
+**All custom roles defined in Civyx:**
+
+| Role | Defined in | Granted to | What it permits |
+|---|---|---|---|
+| `TASK_ORACLE` | TaskRewardDispenser | Every task contract | The **only** way to call `awardTask()` and credit reputation |
+| `SCHEMA_MANAGER` | ExternalTaskVerifier | Admin wallet | The **only** way to register or deactivate external dApp schemas |
+| `REPUTATION_UPDATER` | ReputationRegistry | TaskRewardDispenser only | The **only** way to call `addGlobalReputation()` directly |
+| `APP_MANAGER` | ReputationRegistry | Protocol admin | Register apps for local reputation scoring |
+| `PROPOSAL_REGISTRAR` | GovernanceVoteTask | Protocol admin | Register and close governance proposals |
+| `CAMPAIGN_MANAGER` | AirdropClaimTask | Protocol admin | Create, update, and close airdrop campaigns |
+| `PAUSER_ROLE` | All multi-role contracts | Protocol admin | Pause/unpause — separate from all write permissions |
+| `OPERATOR_ROLE` | IdentityRegistry | Protocol admin | Reserved for protocol-level registry operations |
+| `DEFAULT_ADMIN_ROLE` | All AccessControl contracts | Deployer | Grant and revoke all other roles |
+
+**How TASK_ORACLE makes the entire reputation system trustless:**
+
+```solidity
+// In TaskRewardDispenser:
+bytes32 public constant TASK_ORACLE = keccak256("TASK_ORACLE");
+
+function awardTask(bytes32 commitment, bytes32 taskId)
+    external
+    onlyRole(TASK_ORACLE)   // ← ONLY task contracts can reach this
+    nonReentrant
+    whenNotPaused
+{
+    if (claimed[commitment][taskId]) revert AlreadyClaimed(commitment, taskId);
+    claimed[commitment][taskId] = true;
+    // ... award points
+}
+```
+
+Every task contract — RegisterIdentityTask, StakeMilestoneTask, GovernanceVoteTask, AirdropClaimTask, CommunityDrop, ExternalTaskVerifier — holds this role. Adding a new task type is a single `grantTaskOracle(newContract)` call. Revoking a compromised one is `revokeTaskOracle(address)`. No existing contract changes. No redeployment. The role system handles it.
+
+**How REPUTATION_UPDATER creates a one-way information flow:**
+
+```
+External caller
+    → TaskRewardDispenser.awardTask()     [requires TASK_ORACLE]
+        → ReputationRegistry.addGlobalReputation()  [requires REPUTATION_UPDATER]
+```
+
+Only TaskRewardDispenser holds `REPUTATION_UPDATER`. So reputation can only increase through a completed, verified, deduplicated task award. Nothing else can touch it. No admin shortcut. No direct write path.
+
+**Role definition pattern used throughout:**
+
+```solidity
+bytes32 public constant TASK_ORACLE      = keccak256("TASK_ORACLE");
+bytes32 public constant SCHEMA_MANAGER   = keccak256("SCHEMA_MANAGER");
+bytes32 public constant REPUTATION_UPDATER = keccak256("REPUTATION_UPDATER");
+bytes32 public constant PAUSER_ROLE      = keccak256("PAUSER_ROLE");
+bytes32 public constant PROPOSAL_REGISTRAR = keccak256("PROPOSAL_REGISTRAR");
+bytes32 public constant CAMPAIGN_MANAGER = keccak256("CAMPAIGN_MANAGER");
+```
+
+Each role is a deterministic hash — no magic numbers, no collision risk, fully verifiable by anyone.
+
+---
+
+### 20.2 Ownable — Single-Authority Contracts
+
+**Contracts using it:** TrustOracle · IdentityBroadcaster · RegisterIdentityTask · StakeMilestoneTask · CommunityDrop · CivUSD
+
+**Why it is used here instead of AccessControl:**
+
+Some contracts have a single class of admin action — update a pointer, change a fee, pause the contract. For these, full role separation adds complexity with no security benefit. `Ownable` provides a clean single-owner model with `onlyOwner` guard and `transferOwnership()`.
+
+CivUSD uses Ownable because its admin operations (update price, update fee, swap oracle, pause) are all the same class of trust — they all go to the same admin. AccessControl would add roles with no meaningful separation.
+
+TrustOracle uses Ownable + AccessControl together: Ownable for the owner who can swap underlying registries, AccessControl for the OPERATOR_ROLE.
+
+```solidity
+// CivUSD admin functions — all owner-gated
+function updatePrice(uint256 newPrice) external onlyOwner { ... }
+function setTrustOracle(address newOracle) external onlyOwner { ... }
+function setMintFee(uint256 feeBps) external onlyOwner { ... }
+function pause() external onlyOwner { _pause(); }
+function unpause() external onlyOwner { _unpause(); }
+```
+
+**Ownership transfer is always available** — if the admin key needs to rotate to a multisig or DAO contract, `transferOwnership()` handles it with one call on every Ownable contract.
+
+---
+
+### 20.3 ReentrancyGuard — Protecting Every Value Transfer
+
+**Contracts using it:** IdentityRegistry · TaskRewardDispenser · IdentityBroadcaster · GovernanceVoteTask · AirdropClaimTask · CommunityDrop · ExternalTaskVerifier · CivUSD
+
+**The attack it prevents:**
+
+A reentrancy attack works like this: a malicious contract calls a function that sends ETH. In the ETH transfer, the malicious contract's `receive()` function calls the same function again — before the first call has finished updating state. If balances are checked before transfer but updated after, the attacker drains funds in a loop.
+
+This is how TheDAO was drained for $60M in 2016. It remains one of the most exploited vulnerability classes in Ethereum history.
+
+**Where the risk exists in Civyx:**
+
+Every function that sends native PAS (ETH-equivalent) to a caller is a potential reentrancy target:
+
+| Contract | Function | ETH transfer |
+|---|---|---|
+| IdentityRegistry | `deactivateIdentity()` | Returns full stake |
+| IdentityRegistry | `withdrawStake()` | Returns surplus stake |
+| CommunityDrop | `claim()` | Sends 50 PAS airdrop |
+| CivUSD | `mint()` | Refund of excess (old design) / reserves |
+| CivUSD | `burn()` | Returns collateral |
+| CivUSD | `liquidate()` | Sends collateral to liquidator |
+
+**How ReentrancyGuard works:**
+
+```solidity
+// OpenZeppelin's implementation (simplified):
+uint256 private _status = NOT_ENTERED; // 1
+
+modifier nonReentrant() {
+    require(_status != ENTERED);  // 2 — reverts if already inside
+    _status = ENTERED;            // 2 — lock
+    _;
+    _status = NOT_ENTERED;        // 1 — unlock
+}
+```
+
+A single storage slot acts as a mutex. The second call into any `nonReentrant` function will always find `_status == ENTERED` and revert. No loop possible.
+
+**Applied alongside CEI (Checks-Effects-Interactions):**
+
+ReentrancyGuard is the belt. CEI is the suspenders. Both together on every critical path:
+
+```solidity
+// CivUSD.burn() — ReentrancyGuard + CEI
+function burn(uint256 civUsdAmount) external nonReentrant whenNotPaused {
+    // CHECK
+    if (debtOf[msg.sender] < civUsdAmount) revert InsufficientDebt(...);
+    
+    uint256 collateralReturn = collateralOf[msg.sender] * civUsdAmount / debtOf[msg.sender];
+    
+    // EFFECTS — state updated before any external call
+    collateralOf[msg.sender] -= collateralReturn;
+    debtOf[msg.sender]       -= civUsdAmount;
+    totalCollateral          -= collateralReturn;
+    _burn(msg.sender, civUsdAmount);  // internal ERC20 state update
+    
+    // INTERACTION — external call last
+    (bool ok, ) = msg.sender.call{ value: collateralReturn }("");
+    if (!ok) revert TransferFailed();
+}
+```
+
+Even if `msg.sender` is a contract that tries to re-enter `burn()` during the ETH transfer, `nonReentrant` catches it instantly.
+
+---
+
+### 20.4 Pausable — Protocol-Wide Emergency Controls
+
+**Contracts using it:** IdentityRegistry · ReputationRegistry · OrganizerRegistry · TaskRewardDispenser · GovernanceVoteTask · AirdropClaimTask · ExternalTaskVerifier · CommunityDrop · CivUSD · RegisterIdentityTask · StakeMilestoneTask
+
+**Why every user-facing contract inherits Pausable:**
+
+Smart contracts are immutable by design — you cannot patch a bug by editing the code. Pausable is the emergency brake. If a vulnerability is discovered in any contract, the admin can halt it in one transaction before funds are drained, giving time to assess and redeploy.
+
+**The architecture of pause propagation:**
+
+Because Civyx contracts call each other in chains (task contract → dispenser → reputation registry), pausing the TaskRewardDispenser halts the entire reputation-award pipeline across every task type simultaneously — without touching any individual task contract.
+
+```
+pause(TaskRewardDispenser)
+    → ALL task contracts' dispenser.awardTask() calls revert
+    → No reputation can be awarded anywhere
+    → Identity, staking, endorsements continue unaffected
+```
+
+This means pauses can be surgical. Pause CivUSD independently of the reputation system. Pause ExternalTaskVerifier without affecting native tasks. Each contract has its own independent pause switch.
+
+**How `whenNotPaused` is applied on every critical path:**
+
+```solidity
+// TaskRewardDispenser — the reputation bottleneck
+function awardTask(bytes32 commitment, bytes32 taskId)
+    external
+    onlyRole(TASK_ORACLE)
+    nonReentrant
+    whenNotPaused      // ← one modifier pauses the whole award pipeline
+{
+    ...
+}
+
+// CivUSD — all three value functions gated
+function mint(uint256 civUsdAmount) external payable nonReentrant whenNotPaused { ... }
+function burn(uint256 civUsdAmount) external        nonReentrant whenNotPaused { ... }
+function liquidate(address target, uint256 debt)    nonReentrant whenNotPaused { ... }
+```
+
+**Pausable implementation (OZ v5):**
+
+```solidity
+// OpenZeppelin internals:
+bool private _paused = false;
+
+modifier whenNotPaused() {
+    if (paused()) revert EnforcedPause();
+    _;
+}
+
+function _pause() internal { _paused = true; emit Paused(msg.sender); }
+function _unpause() internal { _paused = false; emit Unpaused(msg.sender); }
+```
+
+Each contract's `pause()` and `unpause()` functions call these internals, gated by `onlyOwner` or `onlyRole(PAUSER_ROLE)` depending on the contract's permission model.
+
+---
+
+### 20.5 ERC20 — CivUSD as a Standard Token
+
+**Contract using it:** CivUSD only
+
+**Why this matters beyond just "it's a token":**
+
+`ERC20` is the universal interface for fungible tokens on Ethereum-compatible chains. By inheriting OZ's `ERC20`, CivUSD automatically becomes compatible with every wallet, DEX, lending protocol, bridge, and analytics platform that works with ERC20 — without writing a single line of interface code.
+
+```solidity
+contract CivUSD is ERC20, Ownable, Pausable, ReentrancyGuard {
+    constructor(...) ERC20("Civyx USD", "CivUSD") Ownable(_admin) { ... }
+```
+
+**What the ERC20 inheritance provides for free:**
+
+| Function | Inherited from ERC20 | Used by |
+|---|---|---|
+| `balanceOf(address)` | Standard view | Frontend CivUSD balance display |
+| `transfer(address, uint256)` | Standard write | CivUSD holders send to others |
+| `approve(address, uint256)` | Standard write | Allows spenders (future DEX integrations) |
+| `transferFrom(...)` | Standard write | Pulls CivUSD from approved holders |
+| `allowance(address, address)` | Standard view | Check approved spending limits |
+| `totalSupply()` | Standard view | Protocol TVL tracking |
+| `name() → "Civyx USD"` | From constructor | Wallet display name |
+| `symbol() → "CivUSD"` | From constructor | Wallet ticker |
+| `decimals() → 18` | Default | Same unit as PAS on EVM |
+
+**The internal functions Civyx uses directly:**
+
+```solidity
+// Mint net CivUSD to user
+_mint(msg.sender, civUsdAmount);
+
+// Mint fee to protocol reserve (contract holds as CivUSD)
+_mint(address(this), fee);
+
+// Burn during repayment — reduces supply
+_burn(msg.sender, civUsdAmount);
+
+// Burn caller's CivUSD during liquidation
+_burn(msg.sender, debtAmount);
+```
+
+`_mint` and `_burn` are internal — only callable from within CivUSD's own functions. External parties cannot mint or burn directly. The only paths to new CivUSD are through `mint()` (identity-gated) and the fee mechanism. The only destruction paths are `burn()` and `liquidate()`.
+
+**Fee as protocol reserve:**
+
+When a user mints, the fee is minted to `address(this)` — the CivUSD contract itself holds the fee as protocol reserve CivUSD. This means:
+- No ETH transfer to a treasury in the hot path (no additional reentrancy vector)
+- Protocol accumulates CivUSD over time
+- Admin can withdraw via a separate owner-gated function at any time
+
+---
+
+### 20.6 MerkleProof — On-Chain Allowlist Verification
+
+**Contract using it:** AirdropClaimTask only
+
+**Why Merkle trees are the right structure for airdrop allowlists:**
+
+Storing 10,000 eligible identities directly on-chain would cost millions of gas. A Merkle tree stores only the 32-byte root on-chain. Users submit a proof (log2(N) hashes — ~13 hashes for 10,000 entries) and the contract verifies their inclusion in O(log N) time. The entire allowlist costs one 32-byte storage write.
+
+**The critical design decision — leaves are commitments, not wallets:**
+
+```solidity
+// Standard airdrop (wallet-based) — Sybil attack possible:
+bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+// → 1 wallet per person... but one person has 50 wallets
+
+// Civyx implementation (identity-based) — Sybil-resistant:
+bytes32 commitment = identityRegistry.getCommitment(msg.sender);
+bytes32 leaf       = keccak256(abi.encodePacked(commitment));
+// → 1 identity per person, regardless of wallets
+```
+
+Any wallet linked to an eligible identity can submit the proof — they share the same commitment. But each identity can only claim once, enforced by the dispenser's `(commitment, taskId)` deduplication. This is the correct model for Sybil-resistant distributions.
+
+**The actual verification call:**
+
+```solidity
+if (!MerkleProof.verify(merkleProof, campaigns[key].merkleRoot, leaf))
+    revert InvalidMerkleProof();
+```
+
+`MerkleProof.verify()` takes the proof array, stored root, and computed leaf. It hashes up the tree and checks the result equals the root. No off-chain trust. No signature from an admin. Entirely deterministic on-chain verification.
+
+**Multi-round support:**
+
+```solidity
+function updateMerkleRoot(bytes32 orgId, bytes32 campaignId, bytes32 newRoot)
+    external onlyRole(CAMPAIGN_MANAGER)
+{
+    campaigns[campaignKey].merkleRoot = newRoot;
+}
+```
+
+Campaigns can update their Merkle root to add new eligible identities — supporting phased distributions without redeploying. The dispenser ensures each identity can still only claim once across all rounds.
+
+---
+
+### 20.7 Why OpenZeppelin v5 Specifically
+
+Civyx uses OpenZeppelin **v5** — the most recent major version, released in late 2023. Key differences from v4 that matter for Civyx:
+
+**AccessControl in v5:** `_grantRole()` and `_revokeRole()` return booleans and emit events on every change. Role enumeration is available. No breaking changes to the core permission model.
+
+**ReentrancyGuard in v5:** Uses `uint256` status values (1/2) instead of boolean to save gas via storage slot packing. The protection logic is identical.
+
+**Ownable in v5:** Constructor takes `address initialOwner` explicitly — no implicit `msg.sender` ownership. This is why every Civyx `Ownable` constructor passes `_admin` explicitly:
+```solidity
+constructor(..., address _admin) ERC20("Civyx USD", "CivUSD") Ownable(_admin) { ... }
+```
+
+**Pausable in v5:** Reverts with custom errors (`EnforcedPause`, `ExpectedPause`) instead of require strings — same gas model as Civyx's own custom errors throughout.
+
+**ERC20 in v5:** Full EIP-20 compliance, `_update()` hook replaces `_beforeTokenTransfer`/`_afterTokenTransfer` for cleaner extension.
+
+---
+
+### 20.8 OpenZeppelin Usage Map — Full Project
+
+| Contract | Ownable | AccessControl | ReentrancyGuard | Pausable | ERC20 | MerkleProof |
+|---|---|---|---|---|---|---|
+| IdentityRegistry | — | ✓ | ✓ | ✓ | — | — |
+| ReputationRegistry | — | ✓ | — | ✓ | — | — |
+| OrganizerRegistry | — | ✓ | — | ✓ | — | — |
+| TrustOracle | ✓ | ✓ | — | — | — | — |
+| IdentityBroadcaster | ✓ | — | ✓ | — | — | — |
+| IdentityVerifierRouter | ✓ | — | — | — | — | — |
+| TaskRewardDispenser | — | ✓ | ✓ | ✓ | — | — |
+| RegisterIdentityTask | ✓ | — | — | ✓ | — | — |
+| StakeMilestoneTask | ✓ | — | — | ✓ | — | — |
+| GovernanceVoteTask | — | ✓ | ✓ | ✓ | — | — |
+| AirdropClaimTask | — | ✓ | ✓ | ✓ | — | ✓ |
+| CommunityDrop | ✓ | — | ✓ | ✓ | — | — |
+| ExternalTaskVerifier | — | ✓ | ✓ | ✓ | — | — |
+| CivUSD | ✓ | — | ✓ | ✓ | ✓ | — |
+| **Total contracts** | **6** | **8** | **8** | **11** | **1** | **1** |
+
+---
+
+## 21. ZK Circuit Architecture
 Three circuits in Noir v1.0.0-beta.18, compiled with Barretenberg UltraHonk. No trusted setup.
 
 ### identity.nr
@@ -718,8 +1080,7 @@ Three circuits in Noir v1.0.0-beta.18, compiled with Barretenberg UltraHonk. No 
 
 ---
 
-## 21. Contract-by-Contract Technical Reference
-
+## 22. Contract-by-Contract Technical Reference
 ---
 
 ### IdentityRegistry
@@ -1228,8 +1589,7 @@ default    → 180   (Tier 0)
 
 ---
 
-## 22. Security Model
-
+## 23. Security Model
 ### ZK layer
 
 - Pedersen hash on BN254 — collision resistant, standard in production ZK systems
@@ -1272,8 +1632,7 @@ default    → 180   (Tier 0)
 
 ---
 
-## 23. Test Coverage
-
+## 24. Test Coverage
 | Contract | Tests | Status | Key coverage |
 |---|---|---|---|
 | TaskRewardDispenser | 34 | ✓ 34/34 | Award curve, AlreadyClaimed, role gates, pause |
@@ -1296,8 +1655,7 @@ default    → 180   (Tier 0)
 
 ---
 
-## 24. Hardhat Configuration
-
+## 25. Hardhat Configuration
 ```typescript
 // hardhat.config.ts
 networks: {
@@ -1332,8 +1690,7 @@ export const TX_OPTIONS = {
 
 ---
 
-## 25. Development Commands
-
+## 26. Development Commands
 ```bash
 # Compile all contracts
 npx hardhat compile
@@ -1387,8 +1744,7 @@ npx hardhat run scripts/testStakeMilestoneTask.ts     --network polkadotTestnet
 
 ---
 
-## 26. Extending the System
-
+## 27. Extending the System
 ### Add a new task contract (minimal template)
 
 ```solidity
