@@ -1713,38 +1713,6 @@ npx hardhat test test/CommunityDrop.test.ts
 npx hardhat test test/CommunityPage.integration.test.ts
 npx hardhat test test/ExternalTaskVerifier.test.ts
 npx hardhat test test/CivUSD.test.ts
-
-# ─── Deploy (already deployed — for reference) ────────────────────────────────
-
-# Core task system
-npx hardhat run scripts/deployTaskRewardDispenser.ts  --network polkadotTestnet
-npx hardhat run scripts/deployRegisterIdentityTask.ts --network polkadotTestnet
-npx hardhat run scripts/deployStakeMilestoneTask.ts   --network polkadotTestnet
-npx hardhat run scripts/deployGovernanceVoteTask.ts   --network polkadotTestnet
-npx hardhat run scripts/deployAirdropClaimTask.ts     --network polkadotTestnet
-npx hardhat run scripts/deployCommunityDrop.ts        --network polkadotTestnet
-
-# DeFi layer
-npx hardhat run scripts/deployExternalTaskVerifier.ts --network polkadotTestnet
-npx hardhat run scripts/deployCivUSD.ts               --network polkadotTestnet
-
-# ─── Setup & operations ───────────────────────────────────────────────────────
-
-# Register genesis organizer + proposal (CommunityPage)
-npx hardhat run scripts/setupCommunityDrop.ts         --network polkadotTestnet
-
-# Top up community drop contract with PAS
-npx hardhat run scripts/fundCommunityDrop.ts          --network polkadotTestnet
-
-# Register external dApp schemas on ExternalTaskVerifier
-# (edit TASKS array in script first)
-npx hardhat run scripts/registerExternalTask.ts       --network polkadotTestnet
-
-# ─── On-chain smoke tests ─────────────────────────────────────────────────────
-
-npx hardhat run scripts/testTaskRewardDispenser.ts    --network polkadotTestnet
-npx hardhat run scripts/testRegisterIdentityTask.ts   --network polkadotTestnet
-npx hardhat run scripts/testStakeMilestoneTask.ts     --network polkadotTestnet
 ```
 
 ---
