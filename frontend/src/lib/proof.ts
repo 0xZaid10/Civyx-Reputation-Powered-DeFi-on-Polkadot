@@ -35,6 +35,8 @@ async function loadCircuit(path: string): Promise<any> {
 
 // Load AsyncApi — the msgpack wrapper that gives the WASM backend named methods
 async function getAsyncApi(backend: any): Promise<any> {
+  // @ts-ignore — /bb-async.js is served as a static asset, not a TS module
+  // @ts-ignore
   const cbind = await import(/* @vite-ignore */ '/bb-async.js');
   return new cbind.AsyncApi(backend);
 }
@@ -60,10 +62,10 @@ async function generateProof(
   onProgress({ step: 'loading', pct: 20, label: 'Preparing...' });
 
   console.log('[proof] Initializing Barretenberg WASM...');
-  const bar = await Barretenberg.new(1);
-  console.log('[proof] WASM backend type:', bar.backend?.constructor?.name);
+  const bar = await (Barretenberg as any).new(1);
+  console.log('[proof] WASM backend type:', (bar as any).backend?.constructor?.name);
 
-  const api = await getAsyncApi(bar.backend);
+  const api = await getAsyncApi((bar as any).backend);
   console.log('[proof] AsyncApi ready');
 
   onProgress({ step: 'preparing', pct: 35, label: 'Preparing...' });
