@@ -12,7 +12,7 @@
 // manually via createAsyncBackend + initSRSChonk.
 
 import { Noir } from '@noir-lang/noir_js';
-import { UltraHonkBackend, BackendType } from '@aztec/bb.js';
+import { UltraHonkBackend } from '@aztec/bb.js';
 
 export type ProofStep = 'idle' | 'loading' | 'preparing' | 'proving' | 'done' | 'error';
 
@@ -50,13 +50,13 @@ let _bbPromise: Promise<any> | null = null;
 async function getBarretenberg(): Promise<any> {
   if (_bbPromise) return _bbPromise;
   _bbPromise = (async () => {
-    const { createAsyncBackend } = await import('@aztec/bb.js') as any;
+    const { Barretenberg, BackendType } = await import('@aztec/bb.js');
     console.log('[bb] Creating Barretenberg (BackendType.Wasm, no worker)...');
-    const backend = await createAsyncBackend(BackendType.Wasm, {}, () => {});
-    console.log('[bb] Initialising SRS...');
-    await backend.initSRSChonk();
+    // Passing { backend: BackendType.Wasm } forces single-threaded WASM — no Worker thread.
+    // Without this, browser default is WasmWorker which hangs on Vercel.
+    const bb = await Barretenberg.new({ backend: BackendType.Wasm });
     console.log('[bb] Barretenberg ready');
-    return backend;
+    return bb;
   })();
   return _bbPromise;
 }
