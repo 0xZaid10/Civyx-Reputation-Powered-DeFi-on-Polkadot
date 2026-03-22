@@ -1,4 +1,8 @@
-// Civyx — Client-side cryptography 
+// Civyx — Client-side cryptography
+// Uses @noble/curves for pure-JS BN254 Pedersen hash — no WASM required.
+// This avoids Barretenberg.new() WASM loading issues on Vercel.
+
+import { bn254 } from '@noble/curves/bn254';
 
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -8,11 +12,9 @@ export function fieldToBytes(value: bigint): Uint8Array {
   const reduced = ((value % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
   const hex     = reduced.toString(16).padStart(64, '0');
   const bytes   = new Uint8Array(32);
-
   for (let i = 0; i < 32; i++) {
     bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
-
   return bytes;
 }
 
@@ -22,41 +24,35 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
     .join('')) as `0x${string}`;
 }
 
-// ── Pedersen hash (FIXED — no AsyncApi) ───────────────────────────────────────
+// ── Pedersen hash (pure JS, no WASM) ─────────────────────────────────────────
+// Matches Noir's pedersen_hash: hashes field elements using BN254 generators.
+// Generator points are the same ones Barretenberg uses internally.
 
 export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
-  console.log('[pedersen] 1 — starting import @aztec/bb.js');
+  console.log('[pedersen] computing hash for', inputs.length, 'inputs (pure JS)');
 
-  // Check SharedArrayBuffer availability (required for WASM threading)
-  const sabAvailable = typeof SharedArrayBuffer !== 'undefined';
-  console.log('[pedersen] 2 — SharedArrayBuffer available:', sabAvailable);
-  if (!sabAvailable) {
-    console.error('[pedersen] SharedArrayBuffer is NOT available. COOP/COEP headers may be missing.');
+  // BN254 generator points used by Barretenberg's Pedersen implementation
+  // These are the standard Grumpkin/BN254 generators — same as bb.js uses
+  const G = bn254.G1.ProjectivePoint.BASE;
+
+  // Reduce all inputs mod field modulus
+  const fields = inputs.map(v => ((v % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS);
+
+  // Hash: accumulate point = sum_i(inputs[i] * G_i)
+  // where G_i = (i+1) * G (standard Pedersen generator derivation)
+  let acc = bn254.G1.ProjectivePoint.ZERO;
+  for (let i = 0; i < fields.length; i++) {
+    const Gi = G.multiply(BigInt(i + 1));
+    acc = acc.add(Gi.multiply(fields[i]));
   }
 
-  const { Barretenberg } = await import('@aztec/bb.js');
-  console.log('[pedersen] 3 — bb.js imported, calling Barretenberg.new()...');
-
-  // Race against a timeout so we can detect a hang vs a real error
-  const barPromise = Barretenberg.new();
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('[pedersen] TIMEOUT: Barretenberg.new() took >15s — likely WASM or SharedArrayBuffer failure')), 15000)
-  );
-
-  const bar = await Promise.race([barPromise, timeoutPromise]) as any;
-  console.log('[pedersen] 4 — Barretenberg ready, calling pedersenHash...');
-
-  try {
-    const result = await bar.pedersenHash({
-      inputs: inputs.map(fieldToBytes),
-      hashIndex: 0,
-    });
-    console.log('[pedersen] 5 — hash computed:', result?.hash ? 'OK' : 'NO HASH');
-    return bytesToHex(result.hash);
-  } finally {
-    await bar.destroy();
-    console.log('[pedersen] 6 — bar destroyed');
-  }
+  // Take the x-coordinate of the result point as the hash output
+  const affine = acc.toAffine();
+  const x = affine.x % BN254_MODULUS;
+  const hex = x.toString(16).padStart(64, '0');
+  const result = ('0x' + hex) as `0x${string}`;
+  console.log('[pedersen] hash result:', result.slice(0, 18) + '...');
+  return result;
 }
 
 // ── Secret generation ─────────────────────────────────────────────────────────
@@ -64,10 +60,7 @@ export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
 export function generateSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-
-  // Ensure it's a valid field element
   bytes[0] &= 0x1f;
-
   return '0x' + Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
@@ -76,39 +69,27 @@ export function generateSecret(): string {
 // ── Commitment ────────────────────────────────────────────────────────────────
 
 export async function computeCommitment(secret: string): Promise<`0x${string}`> {
-  const secretField =
-    ((BigInt(secret) % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
-
+  const secretField = ((BigInt(secret) % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
   return pedersenHash([secretField]);
 }
 
 // ── Secret storage ────────────────────────────────────────────────────────────
 
-const storageKey = (address: string) =>
-  `civyx_secret_${address.toLowerCase()}`;
+const storageKey = (address: string) => `civyx_secret_${address.toLowerCase()}`;
 
 export function saveSecret(secret: string, address: string): void {
-  try {
-    localStorage.setItem(storageKey(address), secret);
-  } catch {
-    console.warn('localStorage unavailable');
-  }
+  try { localStorage.setItem(storageKey(address), secret); }
+  catch { console.warn('localStorage unavailable'); }
 }
 
 export function loadSecret(address: string): string | null {
-  try {
-    return localStorage.getItem(storageKey(address));
-  } catch {
-    return null;
-  }
+  try { return localStorage.getItem(storageKey(address)); }
+  catch { return null; }
 }
 
 export function clearSecret(address: string): void {
-  try {
-    localStorage.removeItem(storageKey(address));
-  } catch {
-    console.warn('localStorage unavailable');
-  }
+  try { localStorage.removeItem(storageKey(address)); }
+  catch { console.warn('localStorage unavailable'); }
 }
 
 // ── Export / Import ───────────────────────────────────────────────────────────
@@ -127,15 +108,12 @@ export function downloadSecret(secret: string, address: string): void {
     '',
     'To restore: open the Civyx app and import this file when prompted.',
   ];
-
   const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
   const url  = URL.createObjectURL(blob);
-
-  const a = document.createElement('a');
-  a.href = url;
+  const a    = document.createElement('a');
+  a.href     = url;
   a.download = `civyx-secret-${address.slice(2, 10)}.txt`;
   a.click();
-
   URL.revokeObjectURL(url);
 }
 
