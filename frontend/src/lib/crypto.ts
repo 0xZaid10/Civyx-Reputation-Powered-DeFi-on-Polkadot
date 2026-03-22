@@ -26,6 +26,9 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
 // AsyncApi wraps BarretenbergWasmAsyncBackend with named methods like pedersenHash.
 async function getAsyncApi(backend: any): Promise<any> {
   // @vite-ignore: bypass Vite's static import analysis
+  // @ts-ignore — /bb-async.js is served as a static asset, not a TS module
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
   const cbind = await import(/* @vite-ignore */ '/bb-async.js');
   return new cbind.AsyncApi(backend);
 }
@@ -38,9 +41,9 @@ async function getAsyncApi(backend: any): Promise<any> {
  */
 export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
   const { Barretenberg } = await import('@aztec/bb.js');
-  const bar = await Barretenberg.new(1);
+  const bar = await (Barretenberg as any).new(1);
   try {
-    const api    = await getAsyncApi(bar.backend);
+    const api    = await getAsyncApi((bar as any).backend);
     const result = await api.pedersenHash({
       inputs:    inputs.map(fieldToBytes),
       hashIndex: 0,
