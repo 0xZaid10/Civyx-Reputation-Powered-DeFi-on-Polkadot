@@ -16,7 +16,7 @@ async function fetchCommitmentFromChain(walletAddress: string): Promise<`0x${str
   // Use raw eth_call to avoid viem type inference issues with template literal types.
   // getCommitment(address) selector = keccak256("getCommitment(address)")[0:4] = 0x49a34a08
   const paddedAddr = walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
-  const calldata   = '0x49a34a08' + paddedAddr;
+  const calldata   = '0xfa1026dd' + paddedAddr;
 
   const res = await fetch('https://eth-rpc-testnet.polkadot.io', {
     method:  'POST',
