@@ -30,15 +30,18 @@ export default function Register() {
   const [computing,  setComputing]  = useState(false);
 
   const { writeContract, data: txHash, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash: txHash,
+  });
 
-  // Step 1 — generate secret + compute commitment via hash_oracle circuit
+  // Step 1 — Generate secret and compute pedersen commitment
   const handleGenerate = useCallback(async () => {
     setError('');
     setComputing(true);
     try {
       const s = generateSecret();
       console.log('[register] secret generated:', s.slice(0, 10) + '...');
+      console.log('[register] computing pedersen commitment...');
       const c = await computeCommitment(s);
       console.log('[register] commitment:', c);
       setSecret(s);
@@ -52,7 +55,7 @@ export default function Register() {
     }
   }, []);
 
-  // Step 2 — download backup
+  // Step 2 — Download backup
   const handleDownload = useCallback(() => {
     if (!address) return;
     downloadSecret(secret, address);
@@ -60,7 +63,7 @@ export default function Register() {
     setDownloaded(true);
   }, [secret, address]);
 
-  // Step 3 — register on-chain
+  // Step 3 — Register on-chain
   const handleRegister = useCallback(async () => {
     setError('');
     try {
@@ -79,6 +82,7 @@ export default function Register() {
     }
   }, [commitment, stakeInput, writeContract]);
 
+  // Advance to done after tx confirmed
   useEffect(() => {
     if (isSuccess && step === 'register') {
       refetch();
@@ -86,6 +90,7 @@ export default function Register() {
     }
   }, [isSuccess, step, refetch]);
 
+  // Already registered
   if (isRegistered) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
@@ -94,9 +99,13 @@ export default function Register() {
             <span className="text-green-600 text-xl">✓</span>
           </div>
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Already Registered</h2>
-          <p className="text-sm text-gray-500 mb-6">This wallet already has a Civyx identity.</p>
-          <button onClick={() => navigate('/app')}
-            className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors">
+          <p className="text-sm text-gray-500 mb-6">
+            This wallet already has a Civyx identity.
+          </p>
+          <button
+            onClick={() => navigate('/app')}
+            className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors"
+          >
             View Dashboard
           </button>
         </div>
@@ -110,7 +119,9 @@ export default function Register() {
         <div className="max-w-sm w-full text-center">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect Wallet</h2>
           <p className="text-sm text-gray-500 mb-6">Connect your wallet to register a Civyx identity.</p>
-          <div className="flex justify-center"><ConnectButton /></div>
+          <div className="flex justify-center">
+            <ConnectButton />
+          </div>
         </div>
       </div>
     );
@@ -120,21 +131,31 @@ export default function Register() {
     <div className="min-h-screen bg-white px-4 py-12">
       <div className="max-w-lg mx-auto">
 
+        {/* Header */}
         <div className="mb-10">
           <h1 className="text-2xl font-semibold text-gray-900">Register Identity</h1>
-          <p className="text-sm text-gray-500 mt-1">Create your Civyx identity in three steps.</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Create your Civyx identity in three steps.
+          </p>
         </div>
 
+        {/* Progress */}
         <div className="flex items-center gap-2 mb-10">
           {(['generate', 'backup', 'register', 'done'] as Step[]).map((s, i) => {
-            const steps   = ['generate', 'backup', 'register', 'done'];
-            const done    = steps.indexOf(s) < steps.indexOf(step) || step === 'done';
-            const active  = s === step;
+            const steps = ['generate', 'backup', 'register', 'done'];
+            const current = steps.indexOf(step);
+            const idx     = steps.indexOf(s);
+            const done    = idx < current || step === 'done';
+            const active  = idx === current;
             return (
               <div key={s} className="flex items-center gap-2">
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors ${
-                  done ? 'bg-green-600 text-white' : active ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-400'
-                }`}>{done ? '✓' : i + 1}</div>
+                  done   ? 'bg-green-600 text-white' :
+                  active ? 'bg-gray-900 text-white'  :
+                           'bg-gray-100 text-gray-400'
+                }`}>
+                  {done ? '✓' : i + 1}
+                </div>
                 {i < 3 && <div className={`h-px w-8 transition-colors ${done ? 'bg-green-600' : 'bg-gray-200'}`} />}
               </div>
             );
@@ -142,6 +163,7 @@ export default function Register() {
           <div className="ml-2 text-xs text-gray-400 capitalize">{step}</div>
         </div>
 
+        {/* Step 1 — Generate */}
         {step === 'generate' && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Generate your secret</h2>
@@ -158,48 +180,65 @@ export default function Register() {
                 <li>• The secret stays on your device</li>
               </ul>
             </div>
-            {error && (
-              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">{error}</div>
-            )}
-            <button onClick={handleGenerate} disabled={computing}
-              className="w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded hover:bg-gray-800 transition-colors disabled:opacity-50">
+            <button
+              onClick={handleGenerate}
+              disabled={computing}
+              className="w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
               {computing ? 'Computing commitment...' : 'Generate Secret'}
             </button>
           </div>
         )}
 
+        {/* Step 2 — Backup */}
         {step === 'backup' && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Back up your secret</h2>
             <p className="text-sm text-gray-500 mb-6 leading-relaxed">
               Download your secret file now. If you lose it, you cannot link new wallets.
             </p>
+
             <div className="bg-gray-50 border border-gray-200 rounded p-4 mb-4 font-mono">
               <div className="text-xs text-gray-500 mb-1">Your commitment (stored on-chain)</div>
               <div className="text-xs text-gray-900 break-all">{shortHash(commitment)}</div>
             </div>
+
             <div className={`border rounded p-4 mb-6 transition-colors ${downloaded ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
               <div className="text-xs text-gray-500 mb-1">Your secret (never leaves your device)</div>
-              <div className="text-xs font-mono text-gray-900 break-all">{secret.slice(0, 16)}...{secret.slice(-8)}</div>
+              <div className="text-xs font-mono text-gray-900 break-all">
+                {secret.slice(0, 16)}...{secret.slice(-8)}
+              </div>
             </div>
-            <button onClick={handleDownload}
+
+            <button
+              onClick={handleDownload}
               className={`w-full py-2.5 text-sm font-medium rounded transition-colors mb-3 ${
-                downloaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-900 text-white hover:bg-gray-800'
-              }`}>
+                downloaded
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-gray-900 text-white hover:bg-gray-800'
+              }`}
+            >
               {downloaded ? '✓ Downloaded' : 'Download Backup File'}
             </button>
+
             {downloaded && (
-              <button onClick={() => setStep('register')}
-                className="w-full py-2.5 border border-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-50 transition-colors">
+              <button
+                onClick={() => setStep('register')}
+                className="w-full py-2.5 border border-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-50 transition-colors"
+              >
                 Continue to Register →
               </button>
             )}
+
             {!downloaded && (
-              <p className="text-xs text-center text-gray-400">You must download the backup before continuing.</p>
+              <p className="text-xs text-center text-gray-400">
+                You must download the backup before continuing.
+              </p>
             )}
           </div>
         )}
 
+        {/* Step 3 — Register */}
         {step === 'register' && !isSuccess && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Register on-chain</h2>
@@ -207,14 +246,23 @@ export default function Register() {
               Your commitment will be stored on-chain with a PAS stake.
               The stake is returned when you deactivate your identity.
             </p>
+
             <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1.5">Stake amount (PAS)</label>
-                <input type="number" min="0.01" step="0.01" value={stakeInput}
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                  Stake amount (PAS)
+                </label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={stakeInput}
                   onChange={e => setStakeInput(e.target.value)}
-                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-green-500" />
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-green-500"
+                />
                 <p className="text-xs text-gray-400 mt-1">Minimum: 0.01 PAS</p>
               </div>
+
               <div className="bg-gray-50 border border-gray-200 rounded p-4">
                 <div className="text-xs font-medium text-gray-500 mb-2">Transaction summary</div>
                 <div className="space-y-1">
@@ -233,37 +281,60 @@ export default function Register() {
                 </div>
               </div>
             </div>
+
             {error && (
-              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">{error}</div>
+              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">
+                {error}
+              </div>
             )}
-            <button onClick={handleRegister} disabled={isPending || isConfirming}
-              className="w-full py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {isPending ? 'Confirm in wallet...' : isConfirming ? 'Confirming...' : 'Register Identity'}
+
+            <button
+              onClick={handleRegister}
+              disabled={isPending || isConfirming}
+              className="w-full py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isPending    ? 'Confirm in wallet...' :
+               isConfirming ? 'Confirming...' :
+                              'Register Identity'}
             </button>
+
             {txHash && (
-              <a href={blockscoutTx(txHash)} target="_blank" rel="noopener noreferrer"
-                className="block text-center text-xs text-green-600 hover:underline mt-3 font-mono">
+              <a
+                href={blockscoutTx(txHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center text-xs text-green-600 hover:underline mt-3 font-mono"
+              >
                 {txHash.slice(0,16)}... ↗
               </a>
             )}
           </div>
         )}
 
+        {/* Done */}
         {step === 'done' && (
           <div className="border border-green-200 bg-green-50 rounded-lg p-8 text-center">
             <div className="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <span className="text-white text-xl">✓</span>
             </div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Identity Registered</h2>
-            <p className="text-sm text-gray-600 mb-2">Your Civyx identity is live on Polkadot Hub.</p>
+            <p className="text-sm text-gray-600 mb-2">
+              Your Civyx identity is live on Polkadot Hub.
+            </p>
             {txHash && (
-              <a href={blockscoutTx(txHash)} target="_blank" rel="noopener noreferrer"
-                className="text-xs font-mono text-green-600 hover:underline block mb-6">
+              <a
+                href={blockscoutTx(txHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-mono text-green-600 hover:underline block mb-6"
+              >
                 View transaction ↗
               </a>
             )}
-            <button onClick={() => navigate('/app')}
-              className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors">
+            <button
+              onClick={() => navigate('/app')}
+              className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors"
+            >
               View Dashboard
             </button>
           </div>
