@@ -57,10 +57,19 @@ async function computeCommitmentViaCircuit(secret: string): Promise<`0x${string}
   for (const prop of candidates) {
     const inner = (backend as any)[prop];
     if (inner && typeof inner === 'object') {
-      const innerProps = Object.getOwnPropertyNames(inner);
-      console.log(`[commitment] backend.${prop} props:`, innerProps.filter(p =>
-        p.toLowerCase().includes('pedersen') || p.toLowerCase().includes('hash')
-      ).join(', ') || '(no pedersen methods)');
+      const innerProps = Object.getOwnPropertyNames(inner)
+        .concat(Object.getOwnPropertyNames(Object.getPrototypeOf(inner) ?? {}));
+      // Log ALL methods to find what's available
+      console.log(`[commitment] backend.${prop} ALL props:`, innerProps.join(', '));
+      // Also log pedersen/hash specific ones
+      const hashProps = innerProps.filter(p =>
+        p.toLowerCase().includes('pedersen') ||
+        p.toLowerCase().includes('hash') ||
+        p.toLowerCase().includes('poseidon') ||
+        p.toLowerCase().includes('blake') ||
+        p.toLowerCase().includes('field')
+      );
+      console.log(`[commitment] backend.${prop} hash props:`, hashProps.join(', ') || '(none)');
 
       if (typeof inner.pedersenHash === 'function') {
         console.log(`[commitment] Found pedersenHash on backend.${prop}`);
