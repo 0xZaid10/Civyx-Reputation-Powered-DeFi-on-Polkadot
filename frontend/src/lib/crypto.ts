@@ -25,19 +25,37 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
 // ── Pedersen hash (FIXED — no AsyncApi) ───────────────────────────────────────
 
 export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
+  console.log('[pedersen] 1 — starting import @aztec/bb.js');
+
+  // Check SharedArrayBuffer availability (required for WASM threading)
+  const sabAvailable = typeof SharedArrayBuffer !== 'undefined';
+  console.log('[pedersen] 2 — SharedArrayBuffer available:', sabAvailable);
+  if (!sabAvailable) {
+    console.error('[pedersen] SharedArrayBuffer is NOT available. COOP/COEP headers may be missing.');
+  }
+
   const { Barretenberg } = await import('@aztec/bb.js');
-  const bar = await Barretenberg.new(1);
+  console.log('[pedersen] 3 — bb.js imported, calling Barretenberg.new(1)...');
+
+  // Race against a timeout so we can detect a hang vs a real error
+  const barPromise = Barretenberg.new(1);
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('[pedersen] TIMEOUT: Barretenberg.new(1) took >15s — likely WASM or SharedArrayBuffer failure')), 15000)
+  );
+
+  const bar = await Promise.race([barPromise, timeoutPromise]) as any;
+  console.log('[pedersen] 4 — Barretenberg ready, calling pedersenHash...');
 
   try {
-    // ✅ FIX: use official API directly
     const result = await bar.pedersenHash({
       inputs: inputs.map(fieldToBytes),
       hashIndex: 0,
     });
-
+    console.log('[pedersen] 5 — hash computed:', result?.hash ? 'OK' : 'NO HASH');
     return bytesToHex(result.hash);
   } finally {
     await bar.destroy();
+    console.log('[pedersen] 6 — bar destroyed');
   }
 }
 
