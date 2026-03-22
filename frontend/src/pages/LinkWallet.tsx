@@ -4,41 +4,51 @@ import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagm
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useProof } from '@/hooks/useProof';
 import { generateWalletLinkProof } from '@/lib/proof';
-import { loadSecret, parseSecretFromFile, shortHash } from '@/lib/crypto';
+import { loadSecret, parseSecretFromFile, shortHash, computeCommitment } from '@/lib/crypto';
 import { CONTRACTS, IDENTITY_REGISTRY_ABI, blockscoutTx } from '@/lib/contracts';
 import { TX_OPTIONS } from '@/lib/txOptions';
 
-// ── Commitment + Nullifier ───────────────────────────────────────────────────
-// Commitment: read from chain (always correct, matches original Barretenberg value).
-// Nullifier:  computed via hash_oracle2 circuit — pedersen([secret, wallet_address]).
+// ── Compute nullifier using pedersen_hash([secret, wallet_address]) ───────────
 
-async function fetchCommitmentFromChain(walletAddress: string): Promise<`0x${string}`> {
-  // Use raw eth_call to avoid viem type inference issues with template literal types.
-  // getCommitment(address) selector = keccak256("getCommitment(address)")[0:4] = 0x49a34a08
-  const paddedAddr = walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
-  const calldata   = '0xfa1026dd' + paddedAddr;
+async function computeNullifier(secret: string, walletAddress: string): Promise<string> {
+  console.log('[nullifier] Starting computation');
+  console.log('[nullifier] secret prefix:', secret.slice(0, 10));
+  console.log('[nullifier] wallet:', walletAddress);
 
-  const res = await fetch('https://eth-rpc-testnet.polkadot.io', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'eth_call',
-      params: [{ to: CONTRACTS.IdentityRegistry, data: calldata }, 'latest'],
-    }),
-  });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error.message);
-  // Result is a 32-byte hex value (bytes32) = the commitment
-  return json.result as `0x${string}`;
+  const { Barretenberg, BN254_FR_MODULUS } = await import('@aztec/bb.js');
+  const MOD = BigInt(BN254_FR_MODULUS.toString());
+
+  function fieldToBytes(value: bigint): Uint8Array {
+    const reduced = ((value % MOD) + MOD) % MOD;
+    const hex     = reduced.toString(16).padStart(64, '0');
+    const bytes   = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return bytes;
+  }
+
+  const secretBytes = fieldToBytes(BigInt(secret));
+  const walletBytes = fieldToBytes(BigInt(walletAddress));
+
+  const bar = await Barretenberg.new(1);
+  console.log('[nullifier] backend type:', bar.backend?.constructor?.name);
+
+  let AsyncApi: any;
+  const cbind = await import(/* @vite-ignore */ '/bb-async.js');
+  AsyncApi = cbind.AsyncApi;
+
+  const api = new AsyncApi(bar.backend);
+  try {
+    const result = await api.pedersenHash({ inputs: [secretBytes, walletBytes], hashIndex: 0 });
+    const nullifier = '0x' + Array.from(result.hash as Uint8Array)
+      .map((b: number) => b.toString(16).padStart(2, '0'))
+      .join('');
+    console.log('[nullifier] nullifier:', nullifier);
+    return nullifier;
+  } finally {
+    await bar.destroy();
+  }
 }
 
-async function computeNullifierViaCircuit(secret: string, walletAddress: string): Promise<string> {
-  const { pedersenHash2 } = await import('@/lib/crypto');
-  const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-  const secretField = (BigInt(secret)      % BN254_MOD + BN254_MOD) % BN254_MOD;
-  const walletField = (BigInt(walletAddress) % BN254_MOD + BN254_MOD) % BN254_MOD;
-  return pedersenHash2(secretField, walletField);
-}
 // ── Progress Bar ──────────────────────────────────────────────────────────────
 
 function ProofProgressBar({ pct, label }: { pct: number; label: string }) {
@@ -100,34 +110,26 @@ export default function LinkWallet() {
     reader.readAsText(file);
   }, []);
 
-  // Step 1 → 2: read commitment from chain (correct Barretenberg value)
+  // Step 1 → 2: compute pedersen commitment from secret
   const handleContinue = useCallback(async () => {
     setError('');
     if (!secret.startsWith('0x') || secret.length !== 66) {
       setError('Secret must be 0x-prefixed 32-byte hex (66 chars).');
       return;
     }
-    if (!address) {
-      setError('Wallet not connected.');
-      return;
-    }
     setComputing(true);
     try {
-      console.log('[link] Reading commitment from chain...');
-      const c = await fetchCommitmentFromChain(address);
-      console.log('[link] commitment from chain:', c);
-      if (!c || c === '0x' + '0'.repeat(64)) {
-        setError('No identity found for this wallet. Please register first.');
-        return;
-      }
+      console.log('[link] Computing pedersen commitment from secret...');
+      const c = await computeCommitment(secret);
+      console.log('[link] commitment:', c);
       setCommitment(c);
       setStep('prove');
     } catch (e: any) {
-      setError('Failed to read commitment: ' + e.message);
+      setError('Failed to compute commitment: ' + e.message);
     } finally {
       setComputing(false);
     }
-  }, [secret, address]);
+  }, [secret]);
 
   // Step 2: generate ZK proof
   const handleGenerateProof = useCallback(async () => {
@@ -135,8 +137,7 @@ export default function LinkWallet() {
     if (!address || !commitment) return;
 
     try {
-      console.log('[link] Computing nullifier...');
-      const nullifierHex = await computeNullifierViaCircuit(secret, address);
+      const nullifierHex = await computeNullifier(secret, address);
       setNullifier(nullifierHex);
 
       const result = await proofHook.generate((onProgress) =>
