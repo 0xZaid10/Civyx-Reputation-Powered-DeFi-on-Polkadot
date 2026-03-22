@@ -3,25 +3,34 @@ import { useNavigate } from 'react-router-dom';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useProof } from '@/hooks/useProof';
-import { generateWalletLinkProof } from '@/lib/proof';
-import { loadSecret, parseSecretFromFile, shortHash, computeCommitment } from '@/lib/crypto';
+import { generateWalletLinkProof, deriveNullifierWithCommitment, storeNullifier } from '@/lib/proof';
+import { loadSecret, parseSecretFromFile, shortHash } from '@/lib/crypto';
 import { CONTRACTS, IDENTITY_REGISTRY_ABI, blockscoutTx } from '@/lib/contracts';
 import { TX_OPTIONS } from '@/lib/txOptions';
 
-// ── Compute nullifier using pedersen_hash([secret, wallet_address]) ───────────
-// Uses pure-JS @noble/curves BN254 — no WASM, no Barretenberg.new() hang.
+// ── Commitment + Nullifier ───────────────────────────────────────────────────
+// Commitment is read from IdentityRegistry (source of truth).
+// Nullifier is derived using the nullifier circuit's ACVM — same Barretenberg
+// Pedersen as the original registration. No Barretenberg.new() needed.
 
-async function computeNullifier(secret: string, walletAddress: string): Promise<string> {
-  console.log('[nullifier] Computing (pure JS)...');
-  const { pedersenHash } = await import('@/lib/crypto');
-  const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-  const secretField = ((BigInt(secret) % BN254_MOD) + BN254_MOD) % BN254_MOD;
-  const walletField = ((BigInt(walletAddress) % BN254_MOD) + BN254_MOD) % BN254_MOD;
-  const nullifier = await pedersenHash([secretField, walletField]);
-  console.log('[nullifier] nullifier:', nullifier);
-  return nullifier;
+async function fetchCommitmentFromChain(walletAddress: string): Promise<string> {
+  const { createPublicClient, http } = await import('viem');
+  const client = createPublicClient({
+    chain: {
+      id: 420420417,
+      name: 'Polkadot Asset Hub Testnet',
+      nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
+      rpcUrls: { default: { http: ['https://eth-rpc-testnet.polkadot.io'] } },
+    } as any,
+    transport: http('https://eth-rpc-testnet.polkadot.io'),
+  });
+  return client.readContract({
+    address: CONTRACTS.IdentityRegistry as `0x${string}`,
+    abi:     IDENTITY_REGISTRY_ABI,
+    functionName: 'getCommitment',
+    args:    [walletAddress],
+  }) as Promise<string>;
 }
-
 // ── Progress Bar ──────────────────────────────────────────────────────────────
 
 function ProofProgressBar({ pct, label }: { pct: number; label: string }) {
@@ -83,29 +92,34 @@ export default function LinkWallet() {
     reader.readAsText(file);
   }, []);
 
-  // Step 1 → 2: compute pedersen commitment from secret
+  // Step 1 → 2: read commitment from chain (correct Barretenberg value)
   const handleContinue = useCallback(async () => {
     setError('');
     if (!secret.startsWith('0x') || secret.length !== 66) {
       setError('Secret must be 0x-prefixed 32-byte hex (66 chars).');
       return;
     }
+    if (!address) {
+      setError('Wallet not connected.');
+      return;
+    }
     setComputing(true);
     try {
-      console.log('[link] Computing pedersen commitment from secret...');
-      console.log('[link] secret length:', secret.length, 'prefix:', secret.slice(0, 10));
-      console.log('[link] window.crossOriginIsolated:', (window as any).crossOriginIsolated);
-      console.log('[link] SharedArrayBuffer:', typeof SharedArrayBuffer);
-      const c = await computeCommitment(secret);
-      console.log('[link] commitment:', c);
+      console.log('[link] Reading commitment from chain...');
+      const c = await fetchCommitmentFromChain(address);
+      console.log('[link] commitment from chain:', c);
+      if (!c || c === '0x' + '0'.repeat(64)) {
+        setError('No identity found for this wallet. Please register first.');
+        return;
+      }
       setCommitment(c);
       setStep('prove');
     } catch (e: any) {
-      setError('Failed to compute commitment: ' + e.message);
+      setError('Failed to read commitment: ' + e.message);
     } finally {
       setComputing(false);
     }
-  }, [secret]);
+  }, [secret, address]);
 
   // Step 2: generate ZK proof
   const handleGenerateProof = useCallback(async () => {
@@ -113,7 +127,9 @@ export default function LinkWallet() {
     if (!address || !commitment) return;
 
     try {
-      const nullifierHex = await computeNullifier(secret, address);
+      console.log('[link] Deriving nullifier...');
+      const nullifierHex = await deriveNullifierWithCommitment(secret, address, commitment);
+      storeNullifier(secret, address, nullifierHex);
       setNullifier(nullifierHex);
 
       const result = await proofHook.generate((onProgress) =>
