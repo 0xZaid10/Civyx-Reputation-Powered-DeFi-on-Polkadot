@@ -9,39 +9,17 @@ import { CONTRACTS, IDENTITY_REGISTRY_ABI, blockscoutTx } from '@/lib/contracts'
 import { TX_OPTIONS } from '@/lib/txOptions';
 
 // ── Compute nullifier using pedersen_hash([secret, wallet_address]) ───────────
+// Uses pure-JS @noble/curves BN254 — no WASM, no Barretenberg.new() hang.
 
 async function computeNullifier(secret: string, walletAddress: string): Promise<string> {
-  console.log('[nullifier] Starting computation');
-
-  const { Barretenberg } = await import('@aztec/bb.js');
-
+  console.log('[nullifier] Computing (pure JS)...');
+  const { pedersenHash } = await import('@/lib/crypto');
   const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-
-  function fieldToBytes(value: bigint): Uint8Array {
-    const reduced = ((value % BN254_MOD) + BN254_MOD) % BN254_MOD;
-    const hex     = reduced.toString(16).padStart(64, '0');
-    const bytes   = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    return bytes;
-  }
-
-  const secretBytes = fieldToBytes(BigInt(secret));
-  const walletBytes = fieldToBytes(BigInt(walletAddress));
-
-  const bar = await Barretenberg.new();
-  try {
-    const result = await bar.pedersenHash({
-      inputs: [secretBytes, walletBytes],
-      hashIndex: 0,
-    });
-    const nullifier = '0x' + Array.from(result.hash as Uint8Array)
-      .map((b: number) => b.toString(16).padStart(2, '0'))
-      .join('');
-    console.log('[nullifier] nullifier:', nullifier);
-    return nullifier;
-  } finally {
-    await bar.destroy();
-  }
+  const secretField = ((BigInt(secret) % BN254_MOD) + BN254_MOD) % BN254_MOD;
+  const walletField = ((BigInt(walletAddress) % BN254_MOD) + BN254_MOD) % BN254_MOD;
+  const nullifier = await pedersenHash([secretField, walletField]);
+  console.log('[nullifier] nullifier:', nullifier);
+  return nullifier;
 }
 
 // ── Progress Bar ──────────────────────────────────────────────────────────────
