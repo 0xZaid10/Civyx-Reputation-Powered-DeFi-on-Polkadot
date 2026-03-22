@@ -1,13 +1,10 @@
 // Civyx — Client-side cryptography
 //
-// Key insight from working reference (prover.ts):
-//   UltraHonkBackend manages its own internal Barretenberg.
-//   NEVER call Barretenberg.new() directly — it hangs on Vercel.
-//   Only use: new UltraHonkBackend(bytecode, { threads: 1 })
+// Pedersen hashing uses hash_oracle.json — a tiny Noir circuit:
+//   fn main(secret: Field) -> pub Field { pedersen_hash([secret]) }
 //
-// For Pedersen hashing: run the identity circuit via noir.execute().
-// The ACVM inside noir_js computes the correct Barretenberg Pedersen hash.
-// We read the commitment from the witness public inputs.
+// noir.execute({ secret }) returns { returnValue } which IS the hash.
+// No Barretenberg.new(). No workers. No hangs. Works on Vercel.
 
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -29,72 +26,83 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
     .join('')) as `0x${string}`;
 }
 
-// ── Circuit cache ─────────────────────────────────────────────────────────────
+// ── Pedersen hash via hash_oracle circuit ─────────────────────────────────────
+// hash_oracle.json: fn main(secret: Field) -> pub Field { pedersen_hash([secret]) }
+// noir.execute() runs the ACVM internally — same Barretenberg Pedersen as on-chain.
+// returnValue is the field element output of the circuit.
 
-const _circuitCache: Record<string, any> = {};
+let _hashCircuit: any = null;
 
-async function loadCircuit(path: string): Promise<any> {
-  if (_circuitCache[path]) return _circuitCache[path];
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`Failed to load circuit: ${path}`);
-  _circuitCache[path] = await res.json();
-  return _circuitCache[path];
+async function getHashCircuit(): Promise<any> {
+  if (_hashCircuit) return _hashCircuit;
+  const res = await fetch('/hash_oracle.json');
+  if (!res.ok) throw new Error('Failed to load hash_oracle.json');
+  _hashCircuit = await res.json();
+  return _hashCircuit;
 }
 
-// ── Pedersen hash via noir.execute() ─────────────────────────────────────────
-//
-// The identity circuit: assert(pedersen_hash([secret]) == commitment)
-// We run noir.execute() with the correct secret and a dummy commitment=0,
-// which will FAIL the constraint — but ACVM solves all witnesses first.
-//
-// Actually: we need the commitment to call execute() successfully.
-// So instead we use the UltraHonkBackend.generateProof flow from proof.ts
-// which already works. For hashing we need a different approach.
-//
-// WORKING APPROACH: The nullifier circuit takes (secret, commitment, nullifier, action_id).
-// We know commitment from chain. We need nullifier = pedersen([secret, action_id]).
-// Run noir.execute() on the wallet_link circuit with:
-//   - secret = our secret
-//   - commitment = from chain (correct Barretenberg value)
-//   - nullifier = 0 (wrong, will fail)
-//   - wallet_address = target wallet
-// The ACVM will compute the witness including the CORRECT nullifier value,
-// then throw a constraint error. We catch it and... we can't get the witness.
-//
-// REAL WORKING APPROACH:
-// Use UltraHonkBackend on the identity circuit, which runs noir.execute() internally.
-// After noir.execute() with correct inputs, publicInputs contains the commitment.
-// We already have commitment from chain.
-// For nullifier: add a dedicated nullifier-only circuit, OR restructure so
-// generateWalletLinkProof doesn't need pre-computed nullifier.
-// See proof.ts — generateWalletLinkProof now handles nullifier internally.
+export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
+  if (inputs.length !== 1) {
+    throw new Error(`hash_oracle circuit takes exactly 1 input, got ${inputs.length}. Use pedersenHash2 for 2 inputs.`);
+  }
 
-export async function computeCommitmentFromChain(
-  walletAddress: string,
-  identityRegistryAddress: string,
-  identityRegistryAbi: any[]
-): Promise<`0x${string}`> {
-  // Read commitment directly from IdentityRegistry on-chain.
-  // This is the source of truth — always matches what Barretenberg computed at registration.
-  const { createPublicClient, http } = await import('viem');
-  const client = createPublicClient({
-    chain: {
-      id: 420420417,
-      name: 'Polkadot Asset Hub Testnet',
-      nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
-      rpcUrls: { default: { http: ['https://eth-rpc-testnet.polkadot.io'] } },
-    } as any,
-    transport: http('https://eth-rpc-testnet.polkadot.io'),
+  const { Noir } = await import('@noir-lang/noir_js');
+  const circuit  = await getHashCircuit();
+  const noir     = new Noir(circuit);
+  await noir.init();
+
+  const secretField = ((inputs[0] % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
+
+  const { returnValue } = await noir.execute({
+    secret: secretField.toString(),
   });
 
-  const commitment = await client.readContract({
-    address: identityRegistryAddress as `0x${string}`,
-    abi: identityRegistryAbi,
-    functionName: 'getCommitment',
-    args: [walletAddress],
-  }) as `0x${string}`;
+  // returnValue is a hex string field element from the circuit
+  const hex = (returnValue as string).replace('0x', '').padStart(64, '0');
+  return `0x${hex}` as `0x${string}`;
+}
 
-  return commitment;
+// ── Pedersen hash for 2 inputs ───────────────────────────────────────────────
+// Uses hash_oracle2.json circuit:
+//   fn main(a: Field, b: Field) -> pub Field { pedersen_hash([a, b]) }
+// Compile with: nargo compile in circuits/hash_oracle2/
+
+let _hash2Circuit: any = null;
+
+async function getHash2Circuit(): Promise<any> {
+  if (_hash2Circuit) return _hash2Circuit;
+  const res = await fetch('/hash_oracle2.json');
+  if (!res.ok) throw new Error(
+    'hash_oracle2.json not found. Compile circuits/hash_oracle2 with nargo and copy to public/.'
+  );
+  _hash2Circuit = await res.json();
+  return _hash2Circuit;
+}
+
+export async function pedersenHash2(a: bigint, b: bigint): Promise<`0x${string}`> {
+  const { Noir } = await import('@noir-lang/noir_js');
+  const circuit  = await getHash2Circuit();
+  const noir     = new Noir(circuit);
+  await noir.init();
+
+  const aField = ((a % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
+  const bField = ((b % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
+
+  const { returnValue } = await noir.execute({
+    a: aField.toString(),
+    b: bField.toString(),
+  });
+
+  const hex = (returnValue as string).replace('0x', '').padStart(64, '0');
+  return `0x${hex}` as `0x${string}`;
+}
+
+export async function computeCommitment(secret: string): Promise<`0x${string}`> {
+  console.log('[crypto] computing commitment via hash_oracle circuit...');
+  const secretBig = BigInt(secret);
+  const result = await pedersenHash([secretBig]);
+  console.log('[crypto] commitment:', result.slice(0, 18) + '...');
+  return result;
 }
 
 // ── Secret generation ─────────────────────────────────────────────────────────
@@ -106,29 +114,6 @@ export function generateSecret(): string {
   return '0x' + Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-// ── computeCommitment — runs identity circuit via UltraHonkBackend ────────────
-// Used at REGISTRATION time only. At link time, read from chain instead.
-// This matches proof.ts pattern exactly: UltraHonkBackend({ threads: 1 }).
-
-export async function computeCommitment(secret: string): Promise<`0x${string}`> {
-  // We can't compute Barretenberg Pedersen without running a circuit.
-  // At registration, the circuit IS run (proof generated), so commitment
-  // comes from the on-chain transaction. We store it in localStorage.
-  const stored = localStorage.getItem(`civyx_commitment_${secret.slice(2, 10)}`);
-  if (stored) return stored as `0x${string}`;
-
-  throw new Error(
-    'Commitment not found. Please register your identity first, ' +
-    'or use your existing wallet to read commitment from chain.'
-  );
-}
-
-export function storeCommitment(secret: string, commitment: string): void {
-  try {
-    localStorage.setItem(`civyx_commitment_${secret.slice(2, 10)}`, commitment);
-  } catch { /* ignore */ }
 }
 
 // ── Secret storage ────────────────────────────────────────────────────────────
