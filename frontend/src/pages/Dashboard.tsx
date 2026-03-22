@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useReadContracts } from 'wagmi';
 import { formatEther, parseEther } from 'viem';
-import { ethers } from 'ethers';
+import { keccak256, toBytes } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useIdentity, useLinkedWallets } from '@/hooks/useIdentity';
 import { shortHash, shortAddress } from '@/lib/crypto';
@@ -400,11 +400,11 @@ const DISPENSER_ABI = [
 ] as const;
 
 const TASK_DEFS = [
-  { id: ethers.keccak256(ethers.toUtf8Bytes('civyx:task:register_identity')),    label: 'Registered identity',       pts: 5, contract: 'RegisterIdentityTask'  },
-  { id: ethers.keccak256(ethers.toUtf8Bytes('civyx:task:stake:100')),            label: 'Staked 100 PAS',             pts: 5, contract: 'StakeMilestoneTask'    },
-  { id: ethers.keccak256(ethers.toUtf8Bytes('civyx:task:stake:500')),            label: 'Staked 500 PAS',             pts: 5, contract: 'StakeMilestoneTask'    },
-  { id: ethers.keccak256(ethers.toUtf8Bytes('civyx:task:stake:1000')),           label: 'Staked 1000 PAS',            pts: 5, contract: 'StakeMilestoneTask'    },
-  { id: ethers.keccak256(ethers.toUtf8Bytes('civyx:task:community_drop:genesis')), label: 'Claimed genesis airdrop',  pts: 5, contract: 'CommunityDrop'         },
+  { id: keccak256(toBytes('civyx:task:register_identity')),    label: 'Registered identity',       pts: 5, contract: 'RegisterIdentityTask'  },
+  { id: keccak256(toBytes('civyx:task:stake:100')),            label: 'Staked 100 PAS',             pts: 5, contract: 'StakeMilestoneTask'    },
+  { id: keccak256(toBytes('civyx:task:stake:500')),            label: 'Staked 500 PAS',             pts: 5, contract: 'StakeMilestoneTask'    },
+  { id: keccak256(toBytes('civyx:task:stake:1000')),           label: 'Staked 1000 PAS',            pts: 5, contract: 'StakeMilestoneTask'    },
+  { id: keccak256(toBytes('civyx:task:community_drop:genesis')), label: 'Claimed genesis airdrop',  pts: 5, contract: 'CommunityDrop'         },
 ] as const;
 
 function TaskHistory({ commitment }: { commitment: `0x${string}` }) {
