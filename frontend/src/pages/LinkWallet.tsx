@@ -13,23 +13,23 @@ import { TX_OPTIONS } from '@/lib/txOptions';
 // Nullifier:  computed via hash_oracle2 circuit — pedersen([secret, wallet_address]).
 
 async function fetchCommitmentFromChain(walletAddress: string): Promise<`0x${string}`> {
-  const { createPublicClient, http } = await import('viem');
-  const client = createPublicClient({
-    chain: {
-      id: 420420417,
-      name: 'Polkadot Asset Hub Testnet',
-      nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
-      rpcUrls: { default: { http: ['https://eth-rpc-testnet.polkadot.io'] } },
-    } as any,
-    transport: http('https://eth-rpc-testnet.polkadot.io'),
+  // Use raw eth_call to avoid viem type inference issues with template literal types.
+  // getCommitment(address) selector = keccak256("getCommitment(address)")[0:4] = 0x49a34a08
+  const paddedAddr = walletAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+  const calldata   = '0x49a34a08' + paddedAddr;
+
+  const res = await fetch('https://eth-rpc-testnet.polkadot.io', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'eth_call',
+      params: [{ to: CONTRACTS.IdentityRegistry, data: calldata }, 'latest'],
+    }),
   });
-  const result: unknown = await client.readContract({
-    address: CONTRACTS.IdentityRegistry as `0x${string}`,
-    abi:     IDENTITY_REGISTRY_ABI,
-    functionName: 'getCommitment',
-    args:    [walletAddress],
-  });
-  return String(result) as `0x${string}`;
+  const json = await res.json();
+  if (json.error) throw new Error(json.error.message);
+  // Result is a 32-byte hex value (bytes32) = the commitment
+  return json.result as `0x${string}`;
 }
 
 async function computeNullifierViaCircuit(secret: string, walletAddress: string): Promise<string> {
