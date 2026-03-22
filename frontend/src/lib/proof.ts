@@ -38,21 +38,16 @@ async function generateProof(
   onProgress({ step: 'loading', pct: 5, label: 'Preparing...' });
 
   console.log('[proof] Loading circuit and libraries...');
-  const [{ Noir }, { Barretenberg, UltraHonkBackend }, circuit] = await Promise.all([
+  const [{ Noir }, { UltraHonkBackend }, circuit] = await Promise.all([
     import('@noir-lang/noir_js'),
     import('@aztec/bb.js'),
     loadCircuit(circuitPath),
   ]);
 
   onProgress({ step: 'loading', pct: 20, label: 'Preparing...' });
-
-  console.log('[proof] Initializing Barretenberg WASM...');
-  const bar = await Barretenberg.new();
-
   onProgress({ step: 'preparing', pct: 35, label: 'Preparing...' });
 
-  // ✅ FIX: pass bar directly (NO AsyncApi, NO internal imports)
-  const backend = new UltraHonkBackend(circuit.bytecode, bar);
+  const backend = new UltraHonkBackend(circuit.bytecode, { threads: 1 });
   const noir    = new Noir(circuit);
 
   console.log('[proof] Initializing Noir...');
