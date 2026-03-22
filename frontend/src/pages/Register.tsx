@@ -5,6 +5,7 @@ import { parseEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import {
   generateSecret,
+  computeCommitment,
   saveSecret,
   downloadSecret,
   shortHash,
@@ -14,76 +15,6 @@ import { TX_OPTIONS } from '@/lib/txOptions';
 import { useIdentity } from '@/hooks/useIdentity';
 
 type Step = 'generate' | 'backup' | 'register' | 'done';
-
-// ── Compute commitment via UltraHonkBackend ───────────────────────────────────
-// UltraHonkBackend initialises its own Barretenberg WASM internally.
-// We access it after instantiation to call pedersenHash.
-// This avoids calling Barretenberg.new() directly which hangs on Vercel.
-
-async function computeCommitmentViaCircuit(secret: string): Promise<`0x${string}`> {
-  // Strategy: call generateProof which internally initialises Barretenberg WASM.
-  // After that call (even if it fails), the WASM worker is running.
-  // We then call Barretenberg.new() which reuses the already-loaded WASM.
-  //
-  // To make generateProof run at all, we need to get past noir.execute().
-  // We achieve this by using the wallet_link circuit with dummy inputs — 
-  // it will fail at constraint check but the WASM will be fully initialised.
-  // Then Barretenberg.new() succeeds immediately.
-
-  const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-  const { Noir } = await import('@noir-lang/noir_js');
-  const { UltraHonkBackend, Barretenberg } = await import('@aztec/bb.js');
-
-  const fieldToBytes = (v: bigint): Uint8Array => {
-    const reduced = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
-    const hex = reduced.toString(16).padStart(64, '0');
-    const b = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    return b;
-  };
-
-  console.log('[commitment] Warming WASM via UltraHonkBackend...');
-  const circuit = await fetch('/identity.json').then(r => r.json());
-  const backend = new UltraHonkBackend(circuit.bytecode, { threads: 1 });
-
-  // Call generateProof with dummy inputs to force WASM worker initialisation.
-  // This will throw (wrong commitment) but that's expected — we only need
-  // the WASM to be loaded as a side effect.
-  const noir = new Noir(circuit);
-  await noir.init();
-
-  try {
-    // Pass secret as both secret and commitment — wrong commitment, will fail.
-    // But noir.execute() runs the ACVM which initialises the WASM worker.
-    const dummyField = (BigInt(secret) % BN254_MOD).toString();
-    await noir.execute({ secret: dummyField, commitment: dummyField });
-  } catch {
-    // Expected — commitment mismatch. WASM is now warm.
-    console.log('[commitment] WASM warmed (expected constraint failure)');
-  }
-
-  // Now Barretenberg.new() should succeed quickly — WASM already loaded
-  console.log('[commitment] Calling Barretenberg.new() on warm WASM...');
-  const bar = await Promise.race([
-    Barretenberg.new(),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Barretenberg.new() timed out even after WASM warm-up')), 15000)
-    ),
-  ]) as any;
-
-  console.log('[commitment] Barretenberg ready, computing pedersen hash...');
-  const result = await bar.pedersenHash({
-    inputs: [fieldToBytes(BigInt(secret))],
-    hashIndex: 0,
-  });
-  await bar.destroy();
-
-  const commitment = ('0x' + Array.from(result.hash as Uint8Array)
-    .map((b: number) => b.toString(16).padStart(2, '0'))
-    .join('')) as `0x${string}`;
-  console.log('[commitment] commitment:', commitment);
-  return commitment;
-}
 
 export default function Register() {
   const { address, isConnected } = useAccount();
@@ -101,14 +32,14 @@ export default function Register() {
   const { writeContract, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
 
+  // Step 1 — generate secret + compute commitment via hash_oracle circuit
   const handleGenerate = useCallback(async () => {
     setError('');
     setComputing(true);
     try {
       const s = generateSecret();
       console.log('[register] secret generated:', s.slice(0, 10) + '...');
-      console.log('[register] computing commitment...');
-      const c = await computeCommitmentViaCircuit(s);
+      const c = await computeCommitment(s);
       console.log('[register] commitment:', c);
       setSecret(s);
       setCommitment(c);
@@ -121,6 +52,7 @@ export default function Register() {
     }
   }, []);
 
+  // Step 2 — download backup
   const handleDownload = useCallback(() => {
     if (!address) return;
     downloadSecret(secret, address);
@@ -128,6 +60,7 @@ export default function Register() {
     setDownloaded(true);
   }, [secret, address]);
 
+  // Step 3 — register on-chain
   const handleRegister = useCallback(async () => {
     setError('');
     try {
@@ -194,9 +127,9 @@ export default function Register() {
 
         <div className="flex items-center gap-2 mb-10">
           {(['generate', 'backup', 'register', 'done'] as Step[]).map((s, i) => {
-            const steps = ['generate', 'backup', 'register', 'done'];
-            const done  = steps.indexOf(s) < steps.indexOf(step) || step === 'done';
-            const active = s === step;
+            const steps   = ['generate', 'backup', 'register', 'done'];
+            const done    = steps.indexOf(s) < steps.indexOf(step) || step === 'done';
+            const active  = s === step;
             return (
               <div key={s} className="flex items-center gap-2">
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors ${
