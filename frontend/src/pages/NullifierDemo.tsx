@@ -8,30 +8,8 @@ import { CONTRACTS, blockscoutTx } from '@/lib/contracts';
 const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 async function computePedersenHash(inputs: bigint[]): Promise<string> {
-  const { Barretenberg } = await import('@aztec/bb.js');
-  const cbind = await import(/* @vite-ignore */ new URL(
-    '../../node_modules/@aztec/bb.js/dest/browser/cbind/generated/async.js',
-    import.meta.url
-  ).href);
-
-  function fieldToBytes(v: bigint): Uint8Array {
-    const r   = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
-    const hex = r.toString(16).padStart(64, '0');
-    const b   = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    return b;
-  }
-
-  const bar = await Barretenberg.new(1);
-  const api = new cbind.AsyncApi(bar.backend);
-  try {
-    const result = await api.pedersenHash({ inputs: inputs.map(fieldToBytes), hashIndex: 0 });
-    return '0x' + Array.from(result.hash as Uint8Array)
-      .map((b: number) => b.toString(16).padStart(2, '0'))
-      .join('');
-  } finally {
-    await bar.destroy();
-  }
+  const { pedersenHash } = await import('@/lib/crypto');
+  return pedersenHash(inputs);
 }
 
 function StepCard({ n, title, done, children }: { n: number; title: string; done?: boolean; children: React.ReactNode }) {
