@@ -139,17 +139,18 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto">
           <p className="text-xs font-bold text-gray-400 uppercase tracking-widest text-center mb-3">The Problem</p>
           <h2 className="text-3xl font-bold text-gray-900 text-center mb-3" style={{ letterSpacing: '-0.02em' }}>
-            One person. A thousand wallets.
+            DeFi treats every wallet the same.<br/>That's the problem.
           </h2>
           <p className="text-gray-500 text-center max-w-xl mx-auto mb-12 leading-relaxed">
-            Creating a blockchain wallet takes 30 seconds and costs nothing.
-            Any system that treats each wallet as a separate identity is trivially broken.
+            Traditional DeFi has no concept of trust. It doesn't matter if you've been a
+            genuine participant for years — you get the same terms as an anonymous bot
+            created 30 seconds ago.
           </p>
           <div className="grid md:grid-cols-3 gap-4 mb-8">
             {[
-              { emoji: '🗳️', title: 'Voting gets gamed', body: 'One actor makes hundreds of wallets, giving themselves hundreds of votes in your DAO. Governance collapses.' },
-              { emoji: '🪂', title: 'Airdrops get drained', body: 'Token rewards meant for thousands of participants get collected by one person running a script.' },
-              { emoji: '🤖', title: 'Reputation is farmed', body: 'Bots endorse each other. Trust scores become meaningless within days of any system going live.' },
+              { emoji: '💸', title: 'Overcollateralised for everyone', body: 'Every borrower locks 150–200% regardless of on-chain history. Trustworthy participants subsidise anonymous ones.' },
+              { emoji: '🪪', title: 'Identity is fragmented', body: 'Your history is split across multiple wallets. Switch wallets and your reputation resets to zero — every time.' },
+              { emoji: '📉', title: 'Reputation has no financial value', body: 'Even years of genuine participation earns you nothing in DeFi. Trust signals are invisible to the protocols that matter most.' },
             ].map(({ emoji, title, body }) => (
               <div key={title} className="bg-red-50 border border-red-100 rounded-2xl p-5">
                 <div className="text-2xl mb-3">{emoji}</div>
@@ -159,11 +160,72 @@ export default function Landing() {
             ))}
           </div>
           <div className="bg-white border border-green-200 rounded-2xl p-6 text-center">
-            <div className="text-green-600 font-bold text-sm uppercase tracking-widest mb-2">The Civyx Approach</div>
+            <div className="text-green-600 font-bold text-sm uppercase tracking-widest mb-2">The Civyx Fix</div>
             <p className="text-gray-700 leading-relaxed max-w-2xl mx-auto">
-              Civyx enforces one identity per participant — not by verifying who you are,
-              but by making it costly and provable to claim a second one.
-              Each identity is unique. Each action is traceable to an identity. No personal data required.
+              Civyx connects your on-chain identity to your DeFi access. The more you participate,
+              the more your reputation grows — and the less collateral you need to mint CivUSD.
+              Reputation becomes a financial primitive, not just a vanity score.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── CIVUSD ───────────────────────────────────────────────────────────── */}
+      <section className="py-20 px-6 bg-gray-50">
+        <div className="max-w-5xl mx-auto">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest text-center mb-3">DeFi</p>
+          <h2 className="text-3xl font-bold text-gray-900 text-center mb-3" style={{ letterSpacing: '-0.02em' }}>
+            CivUSD — Reputation-Aware Stablecoin
+          </h2>
+          <p className="text-gray-500 text-center max-w-xl mx-auto mb-14 leading-relaxed">
+            The first stablecoin where your borrowing terms are determined by who you are on-chain —
+            not just what you own. Higher reputation means less collateral required.
+            No interest. One-time mint fee only.
+          </p>
+
+          {/* Collateral tier table */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
+            <div className="text-sm font-semibold text-gray-900 mb-5 text-center">Collateral requirements by reputation tier</div>
+            <div className="grid grid-cols-5 gap-2">
+              {([
+                { tier: 'Tier 0', rep: '0–49',    ratio: '180%', color: 'border-gray-200 bg-gray-50',        text: 'text-gray-600',   badge: 'text-gray-500 bg-gray-50 border-gray-200' },
+                { tier: 'Tier 1', rep: '50–99',   ratio: '150%', color: 'border-indigo-100 bg-indigo-50/40', text: 'text-indigo-700', badge: 'text-indigo-700 bg-indigo-50 border-indigo-200' },
+                { tier: 'Tier 2', rep: '100–299', ratio: '130%', color: 'border-blue-100 bg-blue-50/40',    text: 'text-blue-700',   badge: 'text-blue-700 bg-blue-50 border-blue-200' },
+                { tier: 'Tier 3', rep: '300–599', ratio: '115%', color: 'border-teal-100 bg-teal-50/40',    text: 'text-teal-700',   badge: 'text-teal-700 bg-teal-50 border-teal-200' },
+                { tier: 'Tier 4', rep: '600+',    ratio: '110%', color: 'border-green-200 bg-green-50/60',  text: 'text-green-700',  badge: 'text-green-700 bg-green-50 border-green-200' },
+              ] as const).map(({ tier, rep, ratio, color, text, badge }) => (
+                <div key={tier} className={`border rounded-xl p-3 text-center ${color}`}>
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge} block mb-2`}>{tier}</span>
+                  <div className="text-xs text-gray-400 mb-1">{rep} rep</div>
+                  <div className={`text-xl font-extrabold ${text}`}>{ratio}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">collateral</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 text-center mt-4">
+              Example: mint 100 CivUSD at Tier 4 — deposit just 110 PAS. At Tier 0 — deposit 180 PAS.
+            </p>
+          </div>
+
+          {/* CivUSD mechanics */}
+          <div className="grid md:grid-cols-3 gap-5 mb-8">
+            {([
+              { title: 'Identity required', body: 'Only verified Civyx identity holders can mint CivUSD. Multi-wallet abuse is structurally impossible.', icon: 'shield' },
+              { title: 'No interest', body: 'A one-time mint fee (0.5% default). No recurring interest, no rate fluctuation. Ethically designed.', icon: 'percent' },
+              { title: 'Fully collateralised', body: 'Every CivUSD is backed by PAS collateral locked on-chain. Burn anytime to recover your full stake.', icon: 'lock' },
+            ] as const).map(({ title, body }) => (
+              <div key={title} className="bg-white border border-gray-100 rounded-xl p-5 hover:border-green-200 transition-all">
+                <div className="font-semibold text-gray-900 mb-2">{title}</div>
+                <p className="text-sm text-gray-500 leading-relaxed">{body}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white border border-green-200 rounded-2xl p-5 text-center">
+            <p className="text-sm text-gray-600 leading-relaxed">
+              <span className="font-semibold text-gray-900">Reputation becomes economically valuable.</span>
+              {' '}Every point you earn on Civyx reduces what you need to lock to access capital.
+              Unhealthy positions can be liquidated — keeping the system solvent at all times.
             </p>
           </div>
         </div>
@@ -545,67 +607,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* ── CIVUSD ───────────────────────────────────────────────────────────── */}
-      <section className="py-20 px-6 bg-gray-50">
-        <div className="max-w-5xl mx-auto">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest text-center mb-3">DeFi</p>
-          <h2 className="text-3xl font-bold text-gray-900 text-center mb-3" style={{ letterSpacing: '-0.02em' }}>
-            CivUSD — Reputation-Aware Stablecoin
-          </h2>
-          <p className="text-gray-500 text-center max-w-xl mx-auto mb-14 leading-relaxed">
-            The first stablecoin where your borrowing terms are determined by who you are on-chain —
-            not just what you own. Higher reputation means less collateral required.
-            No interest. One-time mint fee only.
-          </p>
-
-          {/* Collateral tier table */}
-          <div className="bg-white border border-gray-100 rounded-2xl p-6 mb-8">
-            <div className="text-sm font-semibold text-gray-900 mb-5 text-center">Collateral requirements by reputation tier</div>
-            <div className="grid grid-cols-5 gap-2">
-              {([
-                { tier: 'Tier 0', rep: '0–49',    ratio: '180%', color: 'border-gray-200 bg-gray-50',        text: 'text-gray-600',   badge: 'text-gray-500 bg-gray-50 border-gray-200' },
-                { tier: 'Tier 1', rep: '50–99',   ratio: '150%', color: 'border-indigo-100 bg-indigo-50/40', text: 'text-indigo-700', badge: 'text-indigo-700 bg-indigo-50 border-indigo-200' },
-                { tier: 'Tier 2', rep: '100–299', ratio: '130%', color: 'border-blue-100 bg-blue-50/40',    text: 'text-blue-700',   badge: 'text-blue-700 bg-blue-50 border-blue-200' },
-                { tier: 'Tier 3', rep: '300–599', ratio: '115%', color: 'border-teal-100 bg-teal-50/40',    text: 'text-teal-700',   badge: 'text-teal-700 bg-teal-50 border-teal-200' },
-                { tier: 'Tier 4', rep: '600+',    ratio: '110%', color: 'border-green-200 bg-green-50/60',  text: 'text-green-700',  badge: 'text-green-700 bg-green-50 border-green-200' },
-              ] as const).map(({ tier, rep, ratio, color, text, badge }) => (
-                <div key={tier} className={`border rounded-xl p-3 text-center ${color}`}>
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge} block mb-2`}>{tier}</span>
-                  <div className="text-xs text-gray-400 mb-1">{rep} rep</div>
-                  <div className={`text-xl font-extrabold ${text}`}>{ratio}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">collateral</div>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 text-center mt-4">
-              Example: mint 100 CivUSD at Tier 4 — deposit just 110 PAS. At Tier 0 — deposit 180 PAS.
-            </p>
-          </div>
-
-          {/* CivUSD mechanics */}
-          <div className="grid md:grid-cols-3 gap-5 mb-8">
-            {([
-              { title: 'Identity required', body: 'Only verified Civyx identity holders can mint CivUSD. Multi-wallet abuse is structurally impossible.', icon: 'shield' },
-              { title: 'No interest', body: 'A one-time mint fee (0.5% default). No recurring interest, no rate fluctuation. Ethically designed.', icon: 'percent' },
-              { title: 'Fully collateralised', body: 'Every CivUSD is backed by PAS collateral locked on-chain. Burn anytime to recover your full stake.', icon: 'lock' },
-            ] as const).map(({ title, body }) => (
-              <div key={title} className="bg-white border border-gray-100 rounded-xl p-5 hover:border-green-200 transition-all">
-                <div className="font-semibold text-gray-900 mb-2">{title}</div>
-                <p className="text-sm text-gray-500 leading-relaxed">{body}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white border border-green-200 rounded-2xl p-5 text-center">
-            <p className="text-sm text-gray-600 leading-relaxed">
-              <span className="font-semibold text-gray-900">Reputation becomes economically valuable.</span>
-              {' '}Every point you earn on Civyx reduces what you need to lock to access capital.
-              Unhealthy positions can be liquidated — keeping the system solvent at all times.
-            </p>
-          </div>
-        </div>
-      </section>
-
       {/* ── EXTERNAL TASKS ───────────────────────────────────────────────────── */}
       <section className="py-20 px-6">
         <div className="max-w-5xl mx-auto">
@@ -768,7 +769,7 @@ export default function Landing() {
                 { name: 'ExternalTaskVerifier',  addr: '0x434F288ff599e1f56fe27CF372be2941543b4171' },
               ]},
               { group: 'DeFi Layer', contracts: [
-                { name: 'CivUSD',                addr: '0x3d3055C0949d94477e31DD123D65eEbe2aD762db' },
+                { name: 'CivUSD',                addr: '0xa3ce5424489ed5D8cff238009c61ab48Ef852F6D' },
               ]},
             ] as const).map(({ group, contracts }) => (
               <div key={group} className="bg-white border border-gray-100 rounded-2xl p-5">
