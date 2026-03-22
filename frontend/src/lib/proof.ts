@@ -41,27 +41,9 @@ async function loadCircuit(path: string): Promise<any> {
   return res.json();
 }
 
-// ── Barretenberg singleton ────────────────────────────────────────────────────
-// Uses BackendType.Wasm — single-threaded, no Worker, no hang on Vercel.
-// initSRSChonk downloads CRS data (required for proof generation).
-
-let _bbPromise: Promise<any> | null = null;
-
-async function getBarretenberg(): Promise<any> {
-  if (_bbPromise) return _bbPromise;
-  _bbPromise = (async () => {
-    const { Barretenberg, BackendType } = await import('@aztec/bb.js');
-    console.log('[bb] Creating Barretenberg (BackendType.Wasm, no worker)...');
-    // Passing { backend: BackendType.Wasm } forces single-threaded WASM — no Worker thread.
-    // Without this, browser default is WasmWorker which hangs on Vercel.
-    const bb = await Barretenberg.new({ backend: BackendType.Wasm });
-    console.log('[bb] Barretenberg ready');
-    return bb;
-  })();
-  return _bbPromise;
-}
-
 // ── Core proof generation ─────────────────────────────────────────────────────
+// Runs inside a Web Worker via runInWorker() to avoid Atomics.wait restriction
+// on the main thread. BackendType.WasmWorker is the correct browser backend.
 
 async function generateProof(
   circuitPath: string,
@@ -81,13 +63,22 @@ async function generateProof(
   console.log('[proof] Witness generated');
 
   onProgress({ step: 'proving', pct: 50, label: 'Initialising prover...' });
-  const bb      = await getBarretenberg();
+  console.log('[bb] Creating Barretenberg (WasmWorker)...');
+
+  // Use WasmWorker — runs WASM in a dedicated worker thread, avoiding
+  // the Atomics.wait restriction on the main thread.
+  const { Barretenberg, BackendType } = await import('@aztec/bb.js');
+  const bb = await Barretenberg.new({ backend: BackendType.WasmWorker });
+  console.log('[bb] Barretenberg ready');
+
   const backend = new UltraHonkBackend(circuit.bytecode, bb);
 
   onProgress({ step: 'proving', pct: 65, label: 'Generating proof...' });
   console.log('[proof] Generating proof...');
   const result = await backend.generateProof(witness, { keccakZK: true });
   console.log('[proof] Proof done. publicInputs:', result.publicInputs);
+
+  await bb.destroy();
 
   onProgress({ step: 'done', pct: 100, label: 'Done' });
 
