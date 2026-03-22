@@ -35,12 +35,12 @@ export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
   }
 
   const { Barretenberg } = await import('@aztec/bb.js');
-  console.log('[pedersen] 3 — bb.js imported, calling Barretenberg.new(1)...');
+  console.log('[pedersen] 3 — bb.js imported, calling Barretenberg.new()...');
 
   // Race against a timeout so we can detect a hang vs a real error
-  const barPromise = Barretenberg.new(1);
+  const barPromise = Barretenberg.new();
   const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('[pedersen] TIMEOUT: Barretenberg.new(1) took >15s — likely WASM or SharedArrayBuffer failure')), 15000)
+    setTimeout(() => reject(new Error('[pedersen] TIMEOUT: Barretenberg.new() took >15s — likely WASM or SharedArrayBuffer failure')), 15000)
   );
 
   const bar = await Promise.race([barPromise, timeoutPromise]) as any;
