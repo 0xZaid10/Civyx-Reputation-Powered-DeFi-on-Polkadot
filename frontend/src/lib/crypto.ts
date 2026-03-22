@@ -1,10 +1,6 @@
 // Civyx — Client-side cryptography
-//
-// Pedersen hashing uses hash_oracle.json — a tiny Noir circuit:
-//   fn main(secret: Field) -> pub Field { pedersen_hash([secret]) }
-//
-// noir.execute({ secret }) returns { returnValue } which IS the hash.
-// No Barretenberg.new(). No workers. No hangs. Works on Vercel.
+// Secrets are generated and stay in the browser.
+// Commitments use pedersen_hash (BN254) to match Noir circuits.
 
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -26,99 +22,65 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
     .join('')) as `0x${string}`;
 }
 
-// ── Pedersen hash via hash_oracle circuit ─────────────────────────────────────
-// hash_oracle.json: fn main(secret: Field) -> pub Field { pedersen_hash([secret]) }
-// noir.execute() runs the ACVM internally — same Barretenberg Pedersen as on-chain.
-// returnValue is the field element output of the circuit.
-
-let _hashCircuit: any = null;
-
-async function getHashCircuit(): Promise<any> {
-  if (_hashCircuit) return _hashCircuit;
-  const res = await fetch('/hash_oracle.json');
-  if (!res.ok) throw new Error('Failed to load hash_oracle.json');
-  _hashCircuit = await res.json();
-  return _hashCircuit;
+// Load AsyncApi from the bb.js browser cbind layer.
+// AsyncApi wraps BarretenbergWasmAsyncBackend with named methods like pedersenHash.
+async function getAsyncApi(backend: any): Promise<any> {
+  // @vite-ignore: bypass Vite's static import analysis
+  const cbind = await import(/* @vite-ignore */ '/bb-async.js');
+  return new cbind.AsyncApi(backend);
 }
 
+// ── Pedersen hash (matches Noir circuits) ─────────────────────────────────────
+
+/**
+ * Compute pedersen_hash([...inputs]) using bb.js.
+ * This is what Noir's std::hash::pedersen_hash computes.
+ */
 export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
-  if (inputs.length !== 1) {
-    throw new Error(`hash_oracle circuit takes exactly 1 input, got ${inputs.length}. Use pedersenHash2 for 2 inputs.`);
+  const { Barretenberg } = await import('@aztec/bb.js');
+  const bar = await Barretenberg.new(1);
+  try {
+    const api    = await getAsyncApi(bar.backend);
+    const result = await api.pedersenHash({
+      inputs:    inputs.map(fieldToBytes),
+      hashIndex: 0,
+    });
+    return bytesToHex(result.hash);
+  } finally {
+    await bar.destroy();
   }
-
-  const { Noir } = await import('@noir-lang/noir_js');
-  const circuit  = await getHashCircuit();
-  const noir     = new Noir(circuit);
-  await noir.init();
-
-  const secretField = ((inputs[0] % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
-
-  const { returnValue } = await noir.execute({
-    secret: secretField.toString(),
-  });
-
-  // returnValue is a hex string field element from the circuit
-  const hex = (returnValue as string).replace('0x', '').padStart(64, '0');
-  return `0x${hex}` as `0x${string}`;
-}
-
-// ── Pedersen hash for 2 inputs ───────────────────────────────────────────────
-// Uses hash_oracle2.json circuit:
-//   fn main(a: Field, b: Field) -> pub Field { pedersen_hash([a, b]) }
-// Compile with: nargo compile in circuits/hash_oracle2/
-
-let _hash2Circuit: any = null;
-
-async function getHash2Circuit(): Promise<any> {
-  if (_hash2Circuit) return _hash2Circuit;
-  const res = await fetch('/hash_oracle2.json');
-  if (!res.ok) throw new Error(
-    'hash_oracle2.json not found. Compile circuits/hash_oracle2 with nargo and copy to public/.'
-  );
-  _hash2Circuit = await res.json();
-  return _hash2Circuit;
-}
-
-export async function pedersenHash2(a: bigint, b: bigint): Promise<`0x${string}`> {
-  const { Noir } = await import('@noir-lang/noir_js');
-  const circuit  = await getHash2Circuit();
-  const noir     = new Noir(circuit);
-  await noir.init();
-
-  const aField = ((a % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
-  const bField = ((b % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
-
-  const { returnValue } = await noir.execute({
-    a: aField.toString(),
-    b: bField.toString(),
-  });
-
-  const hex = (returnValue as string).replace('0x', '').padStart(64, '0');
-  return `0x${hex}` as `0x${string}`;
-}
-
-export async function computeCommitment(secret: string): Promise<`0x${string}`> {
-  console.log('[crypto] computing commitment via hash_oracle circuit...');
-  const secretBig = BigInt(secret);
-  const result = await pedersenHash([secretBig]);
-  console.log('[crypto] commitment:', result.slice(0, 18) + '...');
-  return result;
 }
 
 // ── Secret generation ─────────────────────────────────────────────────────────
 
+/**
+ * Generate a cryptographically random 32-byte secret.
+ * Returns a 0x-prefixed hex string that fits in a BN254 field element.
+ */
 export function generateSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
+  // Ensure it's a valid field element by masking the top bit
   bytes[0] &= 0x1f;
   return '0x' + Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
+/**
+ * Compute the on-chain commitment from a secret.
+ * commitment = pedersen_hash([secret])
+ * This matches exactly what the Noir wallet_link circuit verifies.
+ */
+export async function computeCommitment(secret: string): Promise<`0x${string}`> {
+  const secretField = ((BigInt(secret) % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
+  return pedersenHash([secretField]);
+}
+
 // ── Secret storage ────────────────────────────────────────────────────────────
 
-const storageKey = (address: string) => `civyx_secret_${address.toLowerCase()}`;
+const storageKey = (address: string) =>
+  `civyx_secret_${address.toLowerCase()}`;
 
 export function saveSecret(secret: string, address: string): void {
   try { localStorage.setItem(storageKey(address), secret); }
@@ -134,8 +96,6 @@ export function clearSecret(address: string): void {
   try { localStorage.removeItem(storageKey(address)); }
   catch { console.warn('localStorage unavailable'); }
 }
-
-// ── Export / Import ───────────────────────────────────────────────────────────
 
 export function downloadSecret(secret: string, address: string): void {
   const lines = [
