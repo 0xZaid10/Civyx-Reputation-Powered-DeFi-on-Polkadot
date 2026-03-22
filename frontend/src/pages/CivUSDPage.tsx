@@ -305,21 +305,10 @@ export default function CivUSDPage() {
             </a>
             <button
               onClick={addToMetaMask}
-              title="Add CivUSD to MetaMask"
-              className="w-7 h-7 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 shrink-0"
-              style={{ background: 'linear-gradient(135deg, #16a34a, #0d9488)' }}
+              className="text-xs font-medium text-white px-3 py-1.5 rounded-full transition-all hover:opacity-90 active:scale-95"
+              style={{ background: 'linear-gradient(90deg, #16a34a, #0d9488)' }}
             >
-              {/* MetaMask fox simplified SVG */}
-              <svg width="15" height="15" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M27.6 2L17.6 9.4L19.5 5.2L27.6 2Z" fill="#E17726"/>
-                <path d="M4.4 2L14.3 9.5L12.5 5.2L4.4 2Z" fill="#E27625"/>
-                <path d="M23.9 21.4L21.2 25.5L27 27.1L28.7 21.5L23.9 21.4Z" fill="#E27625"/>
-                <path d="M3.3 21.5L5 27.1L10.8 25.5L8.1 21.4L3.3 21.5Z" fill="#E27625"/>
-                <path d="M10.5 14L8.8 16.6L14.5 16.9L14.3 10.8L10.5 14Z" fill="#E27625"/>
-                <path d="M21.5 14L17.6 10.7L17.5 16.9L23.2 16.6L21.5 14Z" fill="#E27625"/>
-                <path d="M10.8 25.5L14.1 23.8L11.3 21.5L10.8 25.5Z" fill="#E27625"/>
-                <path d="M17.9 23.8L21.2 25.5L20.7 21.5L17.9 23.8Z" fill="#E27625"/>
-              </svg>
+              + Add to MetaMask
             </button>
           </div>
           <h1 className="text-2xl font-semibold text-gray-900">CivUSD</h1>
