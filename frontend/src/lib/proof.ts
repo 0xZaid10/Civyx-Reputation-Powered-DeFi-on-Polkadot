@@ -64,7 +64,7 @@ async function generateProof(
   const backend = new UltraHonkBackend(circuit.bytecode, { threads: 1 });
 
   console.log('[proof] Generating proof...');
-  const result = await backend.generateProof(witness, { keccak: true });
+  const result = await backend.generateProof(witness, { keccakZK: true });
   console.log('[proof] Proof done. publicInputs:', result.publicInputs);
 
   onProgress({ step: 'done', pct: 100, label: 'Done' });
