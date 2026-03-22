@@ -82,23 +82,8 @@ export default function IdentityDemo() {
     }
     setComputing(true);
     try {
-      const { Barretenberg } = await import('@aztec/bb.js');
-      const cbind = await import(/* @vite-ignore */ new URL(
-        '../../node_modules/@aztec/bb.js/dest/browser/cbind/generated/async.js',
-        import.meta.url
-      ).href);
-      function fieldToBytes(v: bigint): Uint8Array {
-        const r   = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
-        const hex = r.toString(16).padStart(64, '0');
-        const b   = new Uint8Array(32);
-        for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-        return b;
-      }
-      const bar = await Barretenberg.new(1);
-      const api = new cbind.AsyncApi(bar.backend);
-      const r   = await api.pedersenHash({ inputs: [fieldToBytes(BigInt(secret))], hashIndex: 0 });
-      const c   = '0x' + Array.from(r.hash as Uint8Array).map((b: number) => b.toString(16).padStart(2, '0')).join('');
-      await bar.destroy();
+      const { computeCommitment } = await import('@/lib/crypto');
+      const c = await computeCommitment(secret);
       setCommitment(c);
       setStep('prove');
     } catch(e: any) {
