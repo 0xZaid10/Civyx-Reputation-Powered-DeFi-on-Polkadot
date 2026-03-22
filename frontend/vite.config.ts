@@ -23,6 +23,11 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    rollupOptions: {
+      // /bb-async.js is served as a static public asset — not a bundled module.
+      // Tell Rollup to leave it alone and let the browser fetch it at runtime.
+      external: ['/bb-async.js'],
+    },
   },
   server: {
     headers: {
