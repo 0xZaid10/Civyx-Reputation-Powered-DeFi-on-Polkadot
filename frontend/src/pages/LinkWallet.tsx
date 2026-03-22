@@ -115,6 +115,9 @@ export default function LinkWallet() {
     setComputing(true);
     try {
       console.log('[link] Computing pedersen commitment from secret...');
+      console.log('[link] secret length:', secret.length, 'prefix:', secret.slice(0, 10));
+      console.log('[link] window.crossOriginIsolated:', (window as any).crossOriginIsolated);
+      console.log('[link] SharedArrayBuffer:', typeof SharedArrayBuffer);
       const c = await computeCommitment(secret);
       console.log('[link] commitment:', c);
       setCommitment(c);
