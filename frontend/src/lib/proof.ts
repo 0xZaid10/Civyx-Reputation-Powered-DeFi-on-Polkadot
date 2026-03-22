@@ -89,7 +89,8 @@ async function generateProof(
 
   console.log('[proof] Generating UltraHonk proof...');
   // Use keccak:true for EVM-compatible proofs (equivalent to -t evm in bb CLI)
-  const result = await backend.generateProof(witness);
+  // keccak:true = UltraKeccakHonk (EVM-compatible, -t evm in bb CLI, 8640 bytes)
+  const result = await backend.generateProof(witness, { keccak: true });
   console.log('[proof] Proof generated! proof.length:', result.proof?.length);
   console.log('[proof] publicInputs count:', result.publicInputs?.length);
   console.log('[proof] publicInputs:', result.publicInputs);
