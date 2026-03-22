@@ -28,7 +28,7 @@ async function computeNullifier(secret: string, walletAddress: string): Promise<
   const secretBytes = fieldToBytes(BigInt(secret));
   const walletBytes = fieldToBytes(BigInt(walletAddress));
 
-  const bar = await Barretenberg.new(1);
+  const bar = await Barretenberg.new();
   try {
     const result = await bar.pedersenHash({
       inputs: [secretBytes, walletBytes],
