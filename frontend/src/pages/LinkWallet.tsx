@@ -12,7 +12,7 @@ import { TX_OPTIONS } from '@/lib/txOptions';
 // Commitment: read from chain (always correct, matches original Barretenberg value).
 // Nullifier:  computed via hash_oracle2 circuit — pedersen([secret, wallet_address]).
 
-async function fetchCommitmentFromChain(walletAddress: string): Promise<string> {
+async function fetchCommitmentFromChain(walletAddress: string): Promise<`0x${string}`> {
   const { createPublicClient, http } = await import('viem');
   const client = createPublicClient({
     chain: {
