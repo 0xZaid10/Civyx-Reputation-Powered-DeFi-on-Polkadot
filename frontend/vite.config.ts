@@ -22,6 +22,7 @@ export default defineConfig({
     // bb.js and noir_js ship their own WASM bundles.
     // Excluding prevents Vite from breaking WASM loading and worker resolution.
     exclude: ["@aztec/bb.js", "@noir-lang/noir_js"],
+    include: ["msgpackr"],
     esbuildOptions: {
       conditions: ["browser"],
     },
@@ -38,8 +39,7 @@ export default defineConfig({
         __dirname,
         "node_modules/@aztec/bb.js/dest/browser/index.js"
       ),
-      // Shim msgpackr so bb.js browser bundle resolves it
-      "msgpackr": path.resolve(__dirname, "src/shims/msgpackr.ts"),
+      // msgpackr is now a real dependency — no shim needed
     },
   },
   server: {
