@@ -47,7 +47,7 @@ async function generateProof(
   onProgress({ step: 'loading', pct: 20, label: 'Preparing...' });
 
   console.log('[proof] Initializing Barretenberg WASM...');
-  const bar = await Barretenberg.new(1);
+  const bar = await Barretenberg.new();
 
   onProgress({ step: 'preparing', pct: 35, label: 'Preparing...' });
 
