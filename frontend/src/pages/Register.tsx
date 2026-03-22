@@ -15,133 +15,86 @@ import { useIdentity } from '@/hooks/useIdentity';
 
 type Step = 'generate' | 'backup' | 'register' | 'done';
 
-// Compute commitment by running the identity circuit via UltraHonkBackend.
-// This uses the same Barretenberg Pedersen as the on-chain verifier.
-// Pattern from working reference prover.ts: UltraHonkBackend({ threads: 1 }).
+// ── Compute commitment via UltraHonkBackend ───────────────────────────────────
+// UltraHonkBackend initialises its own Barretenberg WASM internally.
+// We access it after instantiation to call pedersenHash.
+// This avoids calling Barretenberg.new() directly which hangs on Vercel.
+
 async function computeCommitmentViaCircuit(secret: string): Promise<`0x${string}`> {
-  const { Noir } = await import('@noir-lang/noir_js');
   const { UltraHonkBackend } = await import('@aztec/bb.js');
 
   const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-  const secretField = (BigInt(secret) % BN254_MOD).toString();
 
-  // Load identity circuit
-  const res = await fetch('/identity.json');
-  const circuit = await res.json();
+  const fieldToBytes = (v: bigint): Uint8Array => {
+    const reduced = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
+    const hex = reduced.toString(16).padStart(64, '0');
+    const b = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return b;
+  };
 
-  // We need to find commitment such that pedersen([secret]) == commitment.
-  // Strategy: generate a proof on the identity circuit.
-  // The identity circuit public inputs include commitment.
-  // But we need commitment to call noir.execute() — circular!
-  //
-  // SOLUTION: Use UltraHonkBackend with a known-wrong commitment first,
-  // let noir.execute() fail, extract the correct commitment from the error,
-  // then run again with the correct commitment.
-  //
-  // Actually in noir_js beta.18: noir.execute() with wrong commitment throws
-  // a constraint error. We cannot extract witness from errors.
-  //
-  // REAL SOLUTION: Use generateProof which internally calls noir.execute()
-  // through the backend. After proof, publicInputs[0] = commitment.
-  // But generateProof also needs correct commitment as input...
-  //
-  // CORRECT APPROACH:
-  // Create a wrapper circuit that takes secret as private input and RETURNS
-  // commitment as a public output. We don't have that circuit.
-  //
-  // PRAGMATIC SOLUTION FOR REGISTRATION:
-  // Generate the proof on the identity circuit iteratively:
-  // 1. Compute commitment using noble/curves as approximation
-  // 2. Pass it to noir.execute() — it will fail if wrong
-  // 3. Read the actual value from the on-chain tx after registration
-  //
-  // ACTUALLY: At registration, the commitment is passed as an argument
-  // to registerIdentity(commitment). The user provides it.
-  // The circuit verifies it matches their secret when they later prove identity.
-  // So we can pass ANY value as commitment at registration —
-  // but it must match what pedersen([secret]) returns in Barretenberg.
-  //
-  // THE ONLY CORRECT APPROACH WITHOUT BARRETENBERG.NEW():
-  // Use the UltraHonkBackend to generate a proof, passing commitment as input.
-  // If we pass the wrong commitment, the proof will fail verification on-chain.
-  // We need the right commitment. So we MUST use Barretenberg somehow.
-  //
-  // FINAL ANSWER: Use UltraHonkBackend's internal circuit execution.
-  // Create a noir instance, call noir.execute with secret and try commitments.
-  // No — still circular.
-  //
-  // THE WORKING PATTERN: noir.execute() requires ALL inputs including commitment.
-  // generateProof() calls noir.execute() internally.
-  // So we cannot avoid providing the correct commitment upfront.
-  //
-  // CONCLUSION: For registration, we MUST compute the correct Pedersen hash.
-  // The only way without Barretenberg.new() hanging is to use the WASM
-  // that UltraHonkBackend loads internally. We access it via:
-  //   1. Creating a UltraHonkBackend instance
-  //   2. Calling backend.destroy() to clean up
-  // But we can't call pedersenHash on UltraHonkBackend.
-  //
-  // WORKING REAL SOLUTION:
-  // noir.execute() works (reference project uses it).
-  // Barretenberg.new() hangs.
-  // UltraHonkBackend internally calls Barretenberg without hanging.
-  // So: call UltraHonkBackend, then access its internal _wasm or bb property.
+  const circuit = await fetch('/identity.json').then(r => r.json());
 
+  // Create backend — this loads WASM internally
   const backend = new UltraHonkBackend(circuit.bytecode, { threads: 1 });
+  console.log('[commitment] UltraHonkBackend created');
 
-  // Access internal Barretenberg instance (available in bb.js nightly)
-  // The backend exposes bb or api internally — use it for pedersenHash
-  const internalBar = (backend as any).bb ?? (backend as any).api ?? (backend as any)._bb;
-
-  if (internalBar && typeof internalBar.pedersenHash === 'function') {
-    console.log('[commitment] using UltraHonkBackend internal Barretenberg');
-    const fieldToBytes = (v: bigint): Uint8Array => {
-      const reduced = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
-      const hex = reduced.toString(16).padStart(64, '0');
-      const b = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-      return b;
-    };
-    const result = await internalBar.pedersenHash({
-      inputs: [fieldToBytes(BigInt(secret))],
-      hashIndex: 0,
-    });
-    await (backend as any).destroy?.();
-    return ('0x' + Array.from(result.hash as Uint8Array)
-      .map((b: number) => b.toString(16).padStart(2, '0'))
-      .join('')) as `0x${string}`;
+  // Force WASM initialisation
+  if (typeof (backend as any).instantiate === 'function') {
+    await (backend as any).instantiate();
+    console.log('[commitment] instantiate() called');
   }
 
-  // Fallback: initialise backend first (loads WASM), then try Barretenberg.new()
-  // The WASM is now loaded — Barretenberg.new() may succeed after backend init
-  try {
-    await (backend as any).instantiate?.();
-    const { Barretenberg } = await import('@aztec/bb.js');
-    const bar = await Promise.race([
-      Barretenberg.new(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
-    ]) as any;
-    const fieldToBytes = (v: bigint): Uint8Array => {
-      const reduced = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
-      const hex = reduced.toString(16).padStart(64, '0');
-      const b = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-      return b;
-    };
-    const result = await bar.pedersenHash({ inputs: [fieldToBytes(BigInt(secret))], hashIndex: 0 });
-    await bar.destroy();
-    return ('0x' + Array.from(result.hash as Uint8Array)
-      .map((b: number) => b.toString(16).padStart(2, '0'))
-      .join('')) as `0x${string}`;
-  } catch {
-    // Last resort: generate a full proof on the identity circuit.
-    // Use commitment=0 and catch the error to bootstrap.
-    throw new Error(
-      'Could not compute commitment. ' +
-      'Please try refreshing the page. ' +
-      'If the issue persists, ensure your browser supports WebAssembly threads.'
-    );
+  // Log all properties to find the internal Barretenberg instance
+  const allProps = [
+    ...Object.getOwnPropertyNames(backend),
+    ...Object.getOwnPropertyNames(Object.getPrototypeOf(backend) ?? {}),
+  ];
+  console.log('[commitment] backend properties:', allProps.join(', '));
+
+  // Try every known property name for the internal BB instance
+  const candidates = ['bb', 'api', 'wasm', '_bb', '_api', 'backend', 'barretenberg', 'instance', 'acvm'];
+  for (const prop of candidates) {
+    const inner = (backend as any)[prop];
+    if (inner && typeof inner === 'object') {
+      const innerProps = Object.getOwnPropertyNames(inner);
+      console.log(`[commitment] backend.${prop} props:`, innerProps.filter(p =>
+        p.toLowerCase().includes('pedersen') || p.toLowerCase().includes('hash')
+      ).join(', ') || '(no pedersen methods)');
+
+      if (typeof inner.pedersenHash === 'function') {
+        console.log(`[commitment] Found pedersenHash on backend.${prop}`);
+        const result = await inner.pedersenHash({
+          inputs: [fieldToBytes(BigInt(secret))],
+          hashIndex: 0,
+        });
+        return ('0x' + Array.from(result.hash as Uint8Array)
+          .map((b: number) => b.toString(16).padStart(2, '0'))
+          .join('')) as `0x${string}`;
+      }
+    }
   }
+
+  // If no internal BB found, try Barretenberg.new() — WASM may now be cached
+  console.log('[commitment] No internal BB found. Trying Barretenberg.new() with 10s timeout...');
+  const { Barretenberg } = await import('@aztec/bb.js');
+  const bar = await Promise.race([
+    Barretenberg.new(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Barretenberg.new() timed out after 10s')), 10000)
+    ),
+  ]) as any;
+
+  console.log('[commitment] Barretenberg.new() succeeded');
+  const result = await bar.pedersenHash({
+    inputs: [fieldToBytes(BigInt(secret))],
+    hashIndex: 0,
+  });
+  await bar.destroy();
+
+  return ('0x' + Array.from(result.hash as Uint8Array)
+    .map((b: number) => b.toString(16).padStart(2, '0'))
+    .join('')) as `0x${string}`;
 }
 
 export default function Register() {
@@ -158,18 +111,15 @@ export default function Register() {
   const [computing,  setComputing]  = useState(false);
 
   const { writeContract, data: txHash, isPending } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
-    hash: txHash,
-  });
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
 
-  // Step 1 — Generate secret and compute pedersen commitment via circuit
   const handleGenerate = useCallback(async () => {
     setError('');
     setComputing(true);
     try {
       const s = generateSecret();
       console.log('[register] secret generated:', s.slice(0, 10) + '...');
-      console.log('[register] computing commitment via circuit...');
+      console.log('[register] computing commitment...');
       const c = await computeCommitmentViaCircuit(s);
       console.log('[register] commitment:', c);
       setSecret(s);
@@ -183,7 +133,6 @@ export default function Register() {
     }
   }, []);
 
-  // Step 2 — Download backup
   const handleDownload = useCallback(() => {
     if (!address) return;
     downloadSecret(secret, address);
@@ -191,7 +140,6 @@ export default function Register() {
     setDownloaded(true);
   }, [secret, address]);
 
-  // Step 3 — Register on-chain
   const handleRegister = useCallback(async () => {
     setError('');
     try {
@@ -210,7 +158,6 @@ export default function Register() {
     }
   }, [commitment, stakeInput, writeContract]);
 
-  // Advance to done after tx confirmed
   useEffect(() => {
     if (isSuccess && step === 'register') {
       refetch();
@@ -218,7 +165,6 @@ export default function Register() {
     }
   }, [isSuccess, step, refetch]);
 
-  // Already registered
   if (isRegistered) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4">
@@ -227,13 +173,9 @@ export default function Register() {
             <span className="text-green-600 text-xl">✓</span>
           </div>
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Already Registered</h2>
-          <p className="text-sm text-gray-500 mb-6">
-            This wallet already has a Civyx identity.
-          </p>
-          <button
-            onClick={() => navigate('/app')}
-            className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors"
-          >
+          <p className="text-sm text-gray-500 mb-6">This wallet already has a Civyx identity.</p>
+          <button onClick={() => navigate('/app')}
+            className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors">
             View Dashboard
           </button>
         </div>
@@ -247,9 +189,7 @@ export default function Register() {
         <div className="max-w-sm w-full text-center">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect Wallet</h2>
           <p className="text-sm text-gray-500 mb-6">Connect your wallet to register a Civyx identity.</p>
-          <div className="flex justify-center">
-            <ConnectButton />
-          </div>
+          <div className="flex justify-center"><ConnectButton /></div>
         </div>
       </div>
     );
@@ -259,31 +199,21 @@ export default function Register() {
     <div className="min-h-screen bg-white px-4 py-12">
       <div className="max-w-lg mx-auto">
 
-        {/* Header */}
         <div className="mb-10">
           <h1 className="text-2xl font-semibold text-gray-900">Register Identity</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Create your Civyx identity in three steps.
-          </p>
+          <p className="text-sm text-gray-500 mt-1">Create your Civyx identity in three steps.</p>
         </div>
 
-        {/* Progress */}
         <div className="flex items-center gap-2 mb-10">
           {(['generate', 'backup', 'register', 'done'] as Step[]).map((s, i) => {
             const steps = ['generate', 'backup', 'register', 'done'];
-            const current = steps.indexOf(step);
-            const idx     = steps.indexOf(s);
-            const done    = idx < current || step === 'done';
-            const active  = idx === current;
+            const done  = steps.indexOf(s) < steps.indexOf(step) || step === 'done';
+            const active = s === step;
             return (
               <div key={s} className="flex items-center gap-2">
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition-colors ${
-                  done   ? 'bg-green-600 text-white' :
-                  active ? 'bg-gray-900 text-white'  :
-                           'bg-gray-100 text-gray-400'
-                }`}>
-                  {done ? '✓' : i + 1}
-                </div>
+                  done ? 'bg-green-600 text-white' : active ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-400'
+                }`}>{done ? '✓' : i + 1}</div>
                 {i < 3 && <div className={`h-px w-8 transition-colors ${done ? 'bg-green-600' : 'bg-gray-200'}`} />}
               </div>
             );
@@ -291,7 +221,6 @@ export default function Register() {
           <div className="ml-2 text-xs text-gray-400 capitalize">{step}</div>
         </div>
 
-        {/* Step 1 — Generate */}
         {step === 'generate' && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Generate your secret</h2>
@@ -308,22 +237,16 @@ export default function Register() {
                 <li>• The secret stays on your device</li>
               </ul>
             </div>
-            <button
-              onClick={handleGenerate}
-              disabled={computing}
-              className="w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded hover:bg-gray-800 transition-colors disabled:opacity-50"
-            >
+            {error && (
+              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">{error}</div>
+            )}
+            <button onClick={handleGenerate} disabled={computing}
+              className="w-full py-2.5 bg-gray-900 text-white text-sm font-medium rounded hover:bg-gray-800 transition-colors disabled:opacity-50">
               {computing ? 'Computing commitment...' : 'Generate Secret'}
             </button>
-            {error && (
-              <div className="border border-red-200 bg-red-50 rounded p-3 mt-4 text-xs text-red-600">
-                {error}
-              </div>
-            )}
           </div>
         )}
 
-        {/* Step 2 — Backup */}
         {step === 'backup' && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Back up your secret</h2>
@@ -336,37 +259,26 @@ export default function Register() {
             </div>
             <div className={`border rounded p-4 mb-6 transition-colors ${downloaded ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
               <div className="text-xs text-gray-500 mb-1">Your secret (never leaves your device)</div>
-              <div className="text-xs font-mono text-gray-900 break-all">
-                {secret.slice(0, 16)}...{secret.slice(-8)}
-              </div>
+              <div className="text-xs font-mono text-gray-900 break-all">{secret.slice(0, 16)}...{secret.slice(-8)}</div>
             </div>
-            <button
-              onClick={handleDownload}
+            <button onClick={handleDownload}
               className={`w-full py-2.5 text-sm font-medium rounded transition-colors mb-3 ${
-                downloaded
-                  ? 'bg-green-600 text-white hover:bg-green-700'
-                  : 'bg-gray-900 text-white hover:bg-gray-800'
-              }`}
-            >
+                downloaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-900 text-white hover:bg-gray-800'
+              }`}>
               {downloaded ? '✓ Downloaded' : 'Download Backup File'}
             </button>
             {downloaded && (
-              <button
-                onClick={() => setStep('register')}
-                className="w-full py-2.5 border border-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-50 transition-colors"
-              >
+              <button onClick={() => setStep('register')}
+                className="w-full py-2.5 border border-gray-200 text-gray-700 text-sm font-medium rounded hover:bg-gray-50 transition-colors">
                 Continue to Register →
               </button>
             )}
             {!downloaded && (
-              <p className="text-xs text-center text-gray-400">
-                You must download the backup before continuing.
-              </p>
+              <p className="text-xs text-center text-gray-400">You must download the backup before continuing.</p>
             )}
           </div>
         )}
 
-        {/* Step 3 — Register */}
         {step === 'register' && !isSuccess && (
           <div className="border border-gray-200 rounded-lg p-6">
             <h2 className="text-base font-semibold text-gray-900 mb-1">Register on-chain</h2>
@@ -376,17 +288,10 @@ export default function Register() {
             </p>
             <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                  Stake amount (PAS)
-                </label>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={stakeInput}
+                <label className="block text-xs font-medium text-gray-700 mb-1.5">Stake amount (PAS)</label>
+                <input type="number" min="0.01" step="0.01" value={stakeInput}
                   onChange={e => setStakeInput(e.target.value)}
-                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-green-500"
-                />
+                  className="w-full border border-gray-200 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-green-500" />
                 <p className="text-xs text-gray-400 mt-1">Minimum: 0.01 PAS</p>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded p-4">
@@ -408,56 +313,36 @@ export default function Register() {
               </div>
             </div>
             {error && (
-              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">
-                {error}
-              </div>
+              <div className="border border-red-200 bg-red-50 rounded p-3 mb-4 text-xs text-red-600">{error}</div>
             )}
-            <button
-              onClick={handleRegister}
-              disabled={isPending || isConfirming}
-              className="w-full py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isPending    ? 'Confirm in wallet...' :
-               isConfirming ? 'Confirming...' :
-                              'Register Identity'}
+            <button onClick={handleRegister} disabled={isPending || isConfirming}
+              className="w-full py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              {isPending ? 'Confirm in wallet...' : isConfirming ? 'Confirming...' : 'Register Identity'}
             </button>
             {txHash && (
-              <a
-                href={blockscoutTx(txHash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block text-center text-xs text-green-600 hover:underline mt-3 font-mono"
-              >
+              <a href={blockscoutTx(txHash)} target="_blank" rel="noopener noreferrer"
+                className="block text-center text-xs text-green-600 hover:underline mt-3 font-mono">
                 {txHash.slice(0,16)}... ↗
               </a>
             )}
           </div>
         )}
 
-        {/* Done */}
         {step === 'done' && (
           <div className="border border-green-200 bg-green-50 rounded-lg p-8 text-center">
             <div className="w-12 h-12 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <span className="text-white text-xl">✓</span>
             </div>
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Identity Registered</h2>
-            <p className="text-sm text-gray-600 mb-2">
-              Your Civyx identity is live on Polkadot Hub.
-            </p>
+            <p className="text-sm text-gray-600 mb-2">Your Civyx identity is live on Polkadot Hub.</p>
             {txHash && (
-              <a
-                href={blockscoutTx(txHash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs font-mono text-green-600 hover:underline block mb-6"
-              >
+              <a href={blockscoutTx(txHash)} target="_blank" rel="noopener noreferrer"
+                className="text-xs font-mono text-green-600 hover:underline block mb-6">
                 View transaction ↗
               </a>
             )}
-            <button
-              onClick={() => navigate('/app')}
-              className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors"
-            >
+            <button onClick={() => navigate('/app')}
+              className="px-5 py-2.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 transition-colors">
               View Dashboard
             </button>
           </div>
