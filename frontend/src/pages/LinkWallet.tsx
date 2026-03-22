@@ -28,7 +28,7 @@ async function fetchCommitmentFromChain(walletAddress: string): Promise<string> 
     abi:     IDENTITY_REGISTRY_ABI,
     functionName: 'getCommitment',
     args:    [walletAddress],
-  }) as Promise<string>;
+  }) as Promise<`0x${string}`>;
 }
 
 async function computeNullifierViaCircuit(secret: string, walletAddress: string): Promise<string> {
