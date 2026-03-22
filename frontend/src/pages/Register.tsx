@@ -21,9 +21,18 @@ type Step = 'generate' | 'backup' | 'register' | 'done';
 // This avoids calling Barretenberg.new() directly which hangs on Vercel.
 
 async function computeCommitmentViaCircuit(secret: string): Promise<`0x${string}`> {
-  const { UltraHonkBackend } = await import('@aztec/bb.js');
+  // Strategy: call generateProof which internally initialises Barretenberg WASM.
+  // After that call (even if it fails), the WASM worker is running.
+  // We then call Barretenberg.new() which reuses the already-loaded WASM.
+  //
+  // To make generateProof run at all, we need to get past noir.execute().
+  // We achieve this by using the wallet_link circuit with dummy inputs — 
+  // it will fail at constraint check but the WASM will be fully initialised.
+  // Then Barretenberg.new() succeeds immediately.
 
   const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+  const { Noir } = await import('@noir-lang/noir_js');
+  const { UltraHonkBackend, Barretenberg } = await import('@aztec/bb.js');
 
   const fieldToBytes = (v: bigint): Uint8Array => {
     const reduced = ((v % BN254_MOD) + BN254_MOD) % BN254_MOD;
@@ -33,77 +42,47 @@ async function computeCommitmentViaCircuit(secret: string): Promise<`0x${string}
     return b;
   };
 
+  console.log('[commitment] Warming WASM via UltraHonkBackend...');
   const circuit = await fetch('/identity.json').then(r => r.json());
-
-  // Create backend — this loads WASM internally
   const backend = new UltraHonkBackend(circuit.bytecode, { threads: 1 });
-  console.log('[commitment] UltraHonkBackend created');
 
-  // Force WASM initialisation
-  if (typeof (backend as any).instantiate === 'function') {
-    await (backend as any).instantiate();
-    console.log('[commitment] instantiate() called');
+  // Call generateProof with dummy inputs to force WASM worker initialisation.
+  // This will throw (wrong commitment) but that's expected — we only need
+  // the WASM to be loaded as a side effect.
+  const noir = new Noir(circuit);
+  await noir.init();
+
+  try {
+    // Pass secret as both secret and commitment — wrong commitment, will fail.
+    // But noir.execute() runs the ACVM which initialises the WASM worker.
+    const dummyField = (BigInt(secret) % BN254_MOD).toString();
+    await noir.execute({ secret: dummyField, commitment: dummyField });
+  } catch {
+    // Expected — commitment mismatch. WASM is now warm.
+    console.log('[commitment] WASM warmed (expected constraint failure)');
   }
 
-  // Log all properties to find the internal Barretenberg instance
-  const allProps = [
-    ...Object.getOwnPropertyNames(backend),
-    ...Object.getOwnPropertyNames(Object.getPrototypeOf(backend) ?? {}),
-  ];
-  console.log('[commitment] backend properties:', allProps.join(', '));
-
-  // Try every known property name for the internal BB instance
-  const candidates = ['bb', 'api', 'wasm', '_bb', '_api', 'backend', 'barretenberg', 'instance', 'acvm'];
-  for (const prop of candidates) {
-    const inner = (backend as any)[prop];
-    if (inner && typeof inner === 'object') {
-      const innerProps = Object.getOwnPropertyNames(inner)
-        .concat(Object.getOwnPropertyNames(Object.getPrototypeOf(inner) ?? {}));
-      // Log ALL methods to find what's available
-      console.log(`[commitment] backend.${prop} ALL props:`, innerProps.join(', '));
-      // Also log pedersen/hash specific ones
-      const hashProps = innerProps.filter(p =>
-        p.toLowerCase().includes('pedersen') ||
-        p.toLowerCase().includes('hash') ||
-        p.toLowerCase().includes('poseidon') ||
-        p.toLowerCase().includes('blake') ||
-        p.toLowerCase().includes('field')
-      );
-      console.log(`[commitment] backend.${prop} hash props:`, hashProps.join(', ') || '(none)');
-
-      if (typeof inner.pedersenHash === 'function') {
-        console.log(`[commitment] Found pedersenHash on backend.${prop}`);
-        const result = await inner.pedersenHash({
-          inputs: [fieldToBytes(BigInt(secret))],
-          hashIndex: 0,
-        });
-        return ('0x' + Array.from(result.hash as Uint8Array)
-          .map((b: number) => b.toString(16).padStart(2, '0'))
-          .join('')) as `0x${string}`;
-      }
-    }
-  }
-
-  // If no internal BB found, try Barretenberg.new() — WASM may now be cached
-  console.log('[commitment] No internal BB found. Trying Barretenberg.new() with 10s timeout...');
-  const { Barretenberg } = await import('@aztec/bb.js');
+  // Now Barretenberg.new() should succeed quickly — WASM already loaded
+  console.log('[commitment] Calling Barretenberg.new() on warm WASM...');
   const bar = await Promise.race([
     Barretenberg.new(),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Barretenberg.new() timed out after 10s')), 10000)
+      setTimeout(() => reject(new Error('Barretenberg.new() timed out even after WASM warm-up')), 15000)
     ),
   ]) as any;
 
-  console.log('[commitment] Barretenberg.new() succeeded');
+  console.log('[commitment] Barretenberg ready, computing pedersen hash...');
   const result = await bar.pedersenHash({
     inputs: [fieldToBytes(BigInt(secret))],
     hashIndex: 0,
   });
   await bar.destroy();
 
-  return ('0x' + Array.from(result.hash as Uint8Array)
+  const commitment = ('0x' + Array.from(result.hash as Uint8Array)
     .map((b: number) => b.toString(16).padStart(2, '0'))
     .join('')) as `0x${string}`;
+  console.log('[commitment] commitment:', commitment);
+  return commitment;
 }
 
 export default function Register() {
