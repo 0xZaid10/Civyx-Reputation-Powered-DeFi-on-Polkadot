@@ -12,14 +12,13 @@ import { TX_OPTIONS } from '@/lib/txOptions';
 
 async function computeNullifier(secret: string, walletAddress: string): Promise<string> {
   console.log('[nullifier] Starting computation');
-  console.log('[nullifier] secret prefix:', secret.slice(0, 10));
-  console.log('[nullifier] wallet:', walletAddress);
 
-  const { Barretenberg, BN254_FR_MODULUS } = await import('@aztec/bb.js');
-  const MOD = BigInt(BN254_FR_MODULUS.toString());
+  const { Barretenberg } = await import('@aztec/bb.js');
+
+  const BN254_MOD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
   function fieldToBytes(value: bigint): Uint8Array {
-    const reduced = ((value % MOD) + MOD) % MOD;
+    const reduced = ((value % BN254_MOD) + BN254_MOD) % BN254_MOD;
     const hex     = reduced.toString(16).padStart(64, '0');
     const bytes   = new Uint8Array(32);
     for (let i = 0; i < 32; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -30,18 +29,11 @@ async function computeNullifier(secret: string, walletAddress: string): Promise<
   const walletBytes = fieldToBytes(BigInt(walletAddress));
 
   const bar = await Barretenberg.new(1);
-  console.log('[nullifier] backend type:', bar.backend?.constructor?.name);
-
-  let AsyncApi: any;
-  const cbind = await import(/* @vite-ignore */ new URL(
-    '../../node_modules/@aztec/bb.js/dest/browser/cbind/generated/async.js',
-    import.meta.url
-  ).href);
-  AsyncApi = cbind.AsyncApi;
-
-  const api = new AsyncApi(bar.backend);
   try {
-    const result = await api.pedersenHash({ inputs: [secretBytes, walletBytes], hashIndex: 0 });
+    const result = await bar.pedersenHash({
+      inputs: [secretBytes, walletBytes],
+      hashIndex: 0,
+    });
     const nullifier = '0x' + Array.from(result.hash as Uint8Array)
       .map((b: number) => b.toString(16).padStart(2, '0'))
       .join('');
