@@ -1,18 +1,10 @@
 // Civyx — ZK Proof Generation
+// Runs Noir circuits in the browser using noir_js + bb.js.
 //
-// bb.js 3.0.0-nightly.20260102 API (confirmed from source):
-//
-// UltraHonkBackend(bytecode, api) — api must be a Barretenberg instance.
-// Passing { threads: 1 } causes "this.api.circuitProve is not a function".
-//
-// Barretenberg.new() in browser uses BackendType.WasmWorker + initSRSChonk().
-// WasmWorker creates a Worker thread which hangs on Vercel.
-//
-// FIX: Use BackendType.Wasm (no worker, single-threaded) and create Barretenberg
-// manually via createAsyncBackend + initSRSChonk.
-
-import { Noir } from '@noir-lang/noir_js';
-import { UltraHonkBackend } from '@aztec/bb.js';
+// Key architecture (bb.js 3.0.0-nightly.20260102):
+//   UltraHonkBackend(bytecode, api) — api must be passed in explicitly
+//   api = AsyncApi(bar.backend)     — wraps BarretenbergWasmAsyncBackend
+//   bar = Barretenberg.new(1)       — initializes WASM backend
 
 export type ProofStep = 'idle' | 'loading' | 'preparing' | 'proving' | 'done' | 'error';
 
@@ -41,56 +33,85 @@ async function loadCircuit(path: string): Promise<any> {
   return res.json();
 }
 
-// ── Core proof generation ─────────────────────────────────────────────────────
-// Runs inside a Web Worker via runInWorker() to avoid Atomics.wait restriction
-// on the main thread. BackendType.WasmWorker is the correct browser backend.
+// Load AsyncApi — the msgpack wrapper that gives the WASM backend named methods
+async function getAsyncApi(backend: any): Promise<any> {
+  const cbind = await import(/* @vite-ignore */ '/bb-async.js');
+  return new cbind.AsyncApi(backend);
+}
+
+// ── Core proof generation helper ──────────────────────────────────────────────
 
 async function generateProof(
   circuitPath: string,
   inputs:      Record<string, string>,
+  options:     { keccak: boolean },
   onProgress:  OnProgress
 ): Promise<ProofResult> {
-  onProgress({ step: 'loading', pct: 10, label: 'Loading circuit...' });
-  const circuit = await loadCircuit(circuitPath);
+  onProgress({ step: 'loading', pct: 5, label: 'Preparing...' });
 
-  onProgress({ step: 'loading', pct: 20, label: 'Initialising Noir...' });
-  const noir = new Noir(circuit);
+  console.log('[proof] Loading circuit and libraries...');
+  const [{ Noir }, { Barretenberg, UltraHonkBackend }, circuit] = await Promise.all([
+    import('@noir-lang/noir_js'),
+    import('@aztec/bb.js'),
+    loadCircuit(circuitPath),
+  ]);
+  console.log('[proof] Circuit loaded, bytecode length:', circuit.bytecode?.length);
+
+  onProgress({ step: 'loading', pct: 20, label: 'Preparing...' });
+
+  console.log('[proof] Initializing Barretenberg WASM...');
+  const bar = await Barretenberg.new(1);
+  console.log('[proof] WASM backend type:', bar.backend?.constructor?.name);
+
+  const api = await getAsyncApi(bar.backend);
+  console.log('[proof] AsyncApi ready');
+
+  onProgress({ step: 'preparing', pct: 35, label: 'Preparing...' });
+
+  const backend = new UltraHonkBackend(circuit.bytecode, api);
+  const noir    = new Noir(circuit);
+
+  // noir.init() is required in beta.18 before execute()
+  console.log('[proof] Initializing Noir...');
   await noir.init();
 
-  onProgress({ step: 'proving', pct: 35, label: 'Generating witness...' });
-  console.log('[proof] Executing circuit...');
+  console.log('[proof] Executing circuit with inputs:', Object.fromEntries(
+    Object.entries(inputs).map(([k, v]) => [k, v.slice(0, 10) + '...'])
+  ));
+  onProgress({ step: 'proving', pct: 50, label: 'Generating proof...' });
+
   const { witness } = await noir.execute(inputs);
-  console.log('[proof] Witness generated');
+  console.log('[proof] Witness generated, length:', witness?.length ?? witness?.byteLength);
 
-  onProgress({ step: 'proving', pct: 50, label: 'Initialising prover...' });
-  console.log('[bb] Creating Barretenberg (WasmWorker)...');
+  onProgress({ step: 'proving', pct: 75, label: 'Generating proof...' });
 
-  // Use WasmWorker — runs WASM in a dedicated worker thread, avoiding
-  // the Atomics.wait restriction on the main thread.
-  const { Barretenberg, BackendType } = await import('@aztec/bb.js');
-  const bb = await Barretenberg.new({ backend: BackendType.WasmWorker });
-  console.log('[bb] Barretenberg ready');
-
-  const backend = new UltraHonkBackend(circuit.bytecode, bb);
-
-  onProgress({ step: 'proving', pct: 65, label: 'Generating proof...' });
-  console.log('[proof] Generating proof...');
-  const result = await backend.generateProof(witness, { keccakZK: true });
-  console.log('[proof] Proof done. publicInputs:', result.publicInputs);
-
-  await bb.destroy();
+  console.log('[proof] Generating UltraHonk proof...');
+  // Use keccak:true for EVM-compatible proofs (equivalent to -t evm in bb CLI)
+  const result = await backend.generateProof(witness, { keccak: true });
+  console.log('[proof] Proof generated! proof.length:', result.proof?.length);
+  console.log('[proof] publicInputs count:', result.publicInputs?.length);
+  console.log('[proof] publicInputs:', result.publicInputs);
 
   onProgress({ step: 'done', pct: 100, label: 'Done' });
 
+  // proof is Uint8Array → hex
   const proofHex = ('0x' + Array.from(result.proof as Uint8Array)
     .map((b: number) => b.toString(16).padStart(2, '0'))
     .join('')) as `0x${string}`;
 
-  return { proof: proofHex, publicInputs: result.publicInputs as string[] };
+  // publicInputs are already hex strings from bb.js (3 items for wallet_link)
+  return {
+    proof:        proofHex,
+    publicInputs: result.publicInputs as string[],
+  };
 }
 
 // ── Wallet Link Proof ─────────────────────────────────────────────────────────
 
+/**
+ * Proves: pedersen_hash([secret]) == commitment
+ *         pedersen_hash([secret, wallet_address]) == nullifier
+ */
 export async function generateWalletLinkProof(
   secret:        string,
   commitment:    string,
@@ -99,16 +120,20 @@ export async function generateWalletLinkProof(
   onProgress:    OnProgress
 ): Promise<ProofResult> {
   const inputs = {
-    secret:         (BigInt(secret)        % BN254_MOD).toString(),
-    commitment:     (BigInt(commitment)    % BN254_MOD).toString(),
-    nullifier:      (BigInt(nullifier)     % BN254_MOD).toString(),
+    secret:         toField(secret),
+    commitment:     toField(commitment),
+    nullifier:      toField(nullifier),
     wallet_address: (BigInt(walletAddress) % BN254_MOD).toString(),
   };
-  return generateProof('/wallet_link.json', inputs, onProgress);
+  return generateProof('/wallet_link.json', inputs, { keccak: true }, onProgress);
 }
 
 // ── Nullifier Proof ───────────────────────────────────────────────────────────
 
+/**
+ * Proves: pedersen_hash([secret]) == commitment
+ *         pedersen_hash([secret, action_id]) == nullifier
+ */
 export async function generateNullifierProof(
   secret:      string,
   commitment:  string,
@@ -122,11 +147,14 @@ export async function generateNullifierProof(
     nullifier:  toField(nullifier),
     action_id:  toField(actionId),
   };
-  return generateProof('/nullifier.json', inputs, onProgress);
+  return generateProof('/nullifier.json', inputs, { keccak: true }, onProgress);
 }
 
 // ── Identity Proof ────────────────────────────────────────────────────────────
 
+/**
+ * Proves: pedersen_hash([secret]) == commitment
+ */
 export async function generateIdentityProof(
   secret:      string,
   commitment:  string,
@@ -136,5 +164,5 @@ export async function generateIdentityProof(
     secret:     toField(secret),
     commitment: toField(commitment),
   };
-  return generateProof('/identity.json', inputs, onProgress);
+  return generateProof('/identity.json', inputs, { keccak: true }, onProgress);
 }
