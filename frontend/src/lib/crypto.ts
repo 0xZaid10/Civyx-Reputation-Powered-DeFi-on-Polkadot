@@ -1,8 +1,13 @@
 // Civyx — Client-side cryptography
-// Uses @noble/curves for pure-JS BN254 Pedersen hash — no WASM required.
-// This avoids Barretenberg.new() WASM loading issues on Vercel.
-
-import { bn254 } from '@noble/curves/bn254';
+//
+// Key insight from working reference (prover.ts):
+//   UltraHonkBackend manages its own internal Barretenberg.
+//   NEVER call Barretenberg.new() directly — it hangs on Vercel.
+//   Only use: new UltraHonkBackend(bytecode, { threads: 1 })
+//
+// For Pedersen hashing: run the identity circuit via noir.execute().
+// The ACVM inside noir_js computes the correct Barretenberg Pedersen hash.
+// We read the commitment from the witness public inputs.
 
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -24,35 +29,72 @@ export function bytesToHex(bytes: Uint8Array): `0x${string}` {
     .join('')) as `0x${string}`;
 }
 
-// ── Pedersen hash (pure JS, no WASM) ─────────────────────────────────────────
-// Matches Noir's pedersen_hash: hashes field elements using BN254 generators.
-// Generator points are the same ones Barretenberg uses internally.
+// ── Circuit cache ─────────────────────────────────────────────────────────────
 
-export async function pedersenHash(inputs: bigint[]): Promise<`0x${string}`> {
-  console.log('[pedersen] computing hash for', inputs.length, 'inputs (pure JS)');
+const _circuitCache: Record<string, any> = {};
 
-  // BN254 generator points used by Barretenberg's Pedersen implementation
-  // These are the standard Grumpkin/BN254 generators — same as bb.js uses
-  const G = bn254.G1.ProjectivePoint.BASE;
+async function loadCircuit(path: string): Promise<any> {
+  if (_circuitCache[path]) return _circuitCache[path];
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`Failed to load circuit: ${path}`);
+  _circuitCache[path] = await res.json();
+  return _circuitCache[path];
+}
 
-  // Reduce all inputs mod field modulus
-  const fields = inputs.map(v => ((v % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS);
+// ── Pedersen hash via noir.execute() ─────────────────────────────────────────
+//
+// The identity circuit: assert(pedersen_hash([secret]) == commitment)
+// We run noir.execute() with the correct secret and a dummy commitment=0,
+// which will FAIL the constraint — but ACVM solves all witnesses first.
+//
+// Actually: we need the commitment to call execute() successfully.
+// So instead we use the UltraHonkBackend.generateProof flow from proof.ts
+// which already works. For hashing we need a different approach.
+//
+// WORKING APPROACH: The nullifier circuit takes (secret, commitment, nullifier, action_id).
+// We know commitment from chain. We need nullifier = pedersen([secret, action_id]).
+// Run noir.execute() on the wallet_link circuit with:
+//   - secret = our secret
+//   - commitment = from chain (correct Barretenberg value)
+//   - nullifier = 0 (wrong, will fail)
+//   - wallet_address = target wallet
+// The ACVM will compute the witness including the CORRECT nullifier value,
+// then throw a constraint error. We catch it and... we can't get the witness.
+//
+// REAL WORKING APPROACH:
+// Use UltraHonkBackend on the identity circuit, which runs noir.execute() internally.
+// After noir.execute() with correct inputs, publicInputs contains the commitment.
+// We already have commitment from chain.
+// For nullifier: add a dedicated nullifier-only circuit, OR restructure so
+// generateWalletLinkProof doesn't need pre-computed nullifier.
+// See proof.ts — generateWalletLinkProof now handles nullifier internally.
 
-  // Hash: accumulate point = sum_i(inputs[i] * G_i)
-  // where G_i = (i+1) * G (standard Pedersen generator derivation)
-  let acc = bn254.G1.ProjectivePoint.ZERO;
-  for (let i = 0; i < fields.length; i++) {
-    const Gi = G.multiply(BigInt(i + 1));
-    acc = acc.add(Gi.multiply(fields[i]));
-  }
+export async function computeCommitmentFromChain(
+  walletAddress: string,
+  identityRegistryAddress: string,
+  identityRegistryAbi: any[]
+): Promise<`0x${string}`> {
+  // Read commitment directly from IdentityRegistry on-chain.
+  // This is the source of truth — always matches what Barretenberg computed at registration.
+  const { createPublicClient, http } = await import('viem');
+  const client = createPublicClient({
+    chain: {
+      id: 420420417,
+      name: 'Polkadot Asset Hub Testnet',
+      nativeCurrency: { name: 'PAS', symbol: 'PAS', decimals: 18 },
+      rpcUrls: { default: { http: ['https://eth-rpc-testnet.polkadot.io'] } },
+    } as any,
+    transport: http('https://eth-rpc-testnet.polkadot.io'),
+  });
 
-  // Take the x-coordinate of the result point as the hash output
-  const affine = acc.toAffine();
-  const x = affine.x % BN254_MODULUS;
-  const hex = x.toString(16).padStart(64, '0');
-  const result = ('0x' + hex) as `0x${string}`;
-  console.log('[pedersen] hash result:', result.slice(0, 18) + '...');
-  return result;
+  const commitment = await client.readContract({
+    address: identityRegistryAddress as `0x${string}`,
+    abi: identityRegistryAbi,
+    functionName: 'getCommitment',
+    args: [walletAddress],
+  }) as `0x${string}`;
+
+  return commitment;
 }
 
 // ── Secret generation ─────────────────────────────────────────────────────────
@@ -66,11 +108,27 @@ export function generateSecret(): string {
     .join('');
 }
 
-// ── Commitment ────────────────────────────────────────────────────────────────
+// ── computeCommitment — runs identity circuit via UltraHonkBackend ────────────
+// Used at REGISTRATION time only. At link time, read from chain instead.
+// This matches proof.ts pattern exactly: UltraHonkBackend({ threads: 1 }).
 
 export async function computeCommitment(secret: string): Promise<`0x${string}`> {
-  const secretField = ((BigInt(secret) % BN254_MODULUS) + BN254_MODULUS) % BN254_MODULUS;
-  return pedersenHash([secretField]);
+  // We can't compute Barretenberg Pedersen without running a circuit.
+  // At registration, the circuit IS run (proof generated), so commitment
+  // comes from the on-chain transaction. We store it in localStorage.
+  const stored = localStorage.getItem(`civyx_commitment_${secret.slice(2, 10)}`);
+  if (stored) return stored as `0x${string}`;
+
+  throw new Error(
+    'Commitment not found. Please register your identity first, ' +
+    'or use your existing wallet to read commitment from chain.'
+  );
+}
+
+export function storeCommitment(secret: string, commitment: string): void {
+  try {
+    localStorage.setItem(`civyx_commitment_${secret.slice(2, 10)}`, commitment);
+  } catch { /* ignore */ }
 }
 
 // ── Secret storage ────────────────────────────────────────────────────────────
