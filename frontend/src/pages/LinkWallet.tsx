@@ -23,12 +23,13 @@ async function fetchCommitmentFromChain(walletAddress: string): Promise<`0x${str
     } as any,
     transport: http('https://eth-rpc-testnet.polkadot.io'),
   });
-  return client.readContract({
+  const result = await client.readContract({
     address: CONTRACTS.IdentityRegistry as `0x${string}`,
     abi:     IDENTITY_REGISTRY_ABI,
     functionName: 'getCommitment',
     args:    [walletAddress],
-  }) as Promise<`0x${string}`>;
+  });
+  return result as `0x${string}`;
 }
 
 async function computeNullifierViaCircuit(secret: string, walletAddress: string): Promise<string> {
