@@ -29,14 +29,16 @@ async function computeNullifier(secret: string, walletAddress: string): Promise<
   const secretBytes = fieldToBytes(BigInt(secret));
   const walletBytes = fieldToBytes(BigInt(walletAddress));
 
-  const bar = await Barretenberg.new(1);
-  console.log('[nullifier] backend type:', bar.backend?.constructor?.name);
+  const bar = await (Barretenberg as any).new(1);
+  console.log('[nullifier] backend type:', (bar as any).backend?.constructor?.name);
 
   let AsyncApi: any;
+  // @ts-ignore — /bb-async.js is served as a static asset, not a TS module
+  // @ts-ignore
   const cbind = await import(/* @vite-ignore */ '/bb-async.js');
   AsyncApi = cbind.AsyncApi;
 
-  const api = new AsyncApi(bar.backend);
+  const api = new AsyncApi((bar as any).backend);
   try {
     const result = await api.pedersenHash({ inputs: [secretBytes, walletBytes], hashIndex: 0 });
     const nullifier = '0x' + Array.from(result.hash as Uint8Array)
