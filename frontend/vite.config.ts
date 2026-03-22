@@ -1,51 +1,33 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import { nodePolyfills } from "vite-plugin-node-polyfills";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import path from 'path';
 
 export default defineConfig({
   plugins: [
     react(),
     nodePolyfills({
-      globals: {
-        Buffer: true,
-        global: true,
-        process: true,
-      },
+      globals: { Buffer: true, global: true, process: true },
       protocolImports: true,
     }),
   ],
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './src') },
+  },
+  define: {
+    global: 'globalThis',
+  },
   optimizeDeps: {
-    // bb.js and noir_js ship their own WASM bundles.
-    // Excluding prevents Vite from breaking WASM loading and worker resolution.
-    exclude: ["@aztec/bb.js", "@noir-lang/noir_js"],
-    include: ["msgpackr"],
-    esbuildOptions: {
-      conditions: ["browser"],
-    },
+    exclude: ['@noir-lang/noir_js', '@aztec/bb.js'],
+    include: ['msgpackr'],
   },
   build: {
-    target: "esnext",
-  },
-  resolve: {
-    conditions: ["browser", "module", "import", "default"],
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-      // Point bb.js explicitly to its browser build
-      "@aztec/bb.js": path.resolve(
-        __dirname,
-        "node_modules/@aztec/bb.js/dest/browser/index.js"
-      ),
-      // msgpackr is now a real dependency — no shim needed
-    },
+    target: 'esnext',
   },
   server: {
     headers: {
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "require-corp",
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy':   'same-origin',
     },
   },
 });
