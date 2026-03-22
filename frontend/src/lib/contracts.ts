@@ -7,7 +7,7 @@ export const CONTRACTS = {
   IdentityRegistry:       '0x56BBC4969818d4E27Fe39983f8aDee4F3e1C5c6f',
   ReputationRegistry:     '0xa9FCD9102fbe420a40B380a891f94a3Fc1D4Fb2c',
   OrganizerRegistry:      '0x8A472Ca618c74FdF270A9A75bE6034a7d98BB9B9',
-  TrustOracle:            '0xcb68357b50A5e759E9C530f172A8174EfA1E350D',
+  TrustOracle:            '0xe6aD6C8f4943CC39b5dFb46FB88a1597bdF4b467',
   IdentityBroadcaster:    '0x9A5710098B845e7841E1D09E1bde0dC1e30374AC',
   // ── ZK verifiers ──────────────────────────────────────────────────────────
   WalletLinkVerifier:     '0x72CC5BA2958CB688B00dFE2E578Db3BbB79eD311',
