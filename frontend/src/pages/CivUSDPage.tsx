@@ -45,18 +45,16 @@ const CIVUSD_ABI = [
     ],
   },
   {
-    name: 'debtOf',
+    name: 'getPosition',
     type: 'function',
     stateMutability: 'view',
     inputs: [{ name: 'wallet', type: 'address' }],
-    outputs: [{ type: 'uint256' }],
-  },
-  {
-    name: 'collateralOf',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'wallet', type: 'address' }],
-    outputs: [{ type: 'uint256' }],
+    outputs: [
+      { name: 'lockedCollateral', type: 'uint256' },
+      { name: 'mintedAmount',     type: 'uint256' },
+      { name: 'currentRatioBps',  type: 'uint256' },
+      { name: 'currentRep',       type: 'uint256' },
+    ],
   },
   {
     name: 'collateralRatioFor',
@@ -147,24 +145,38 @@ export default function CivUSDPage() {
   const [collInput,   setCollInput]   = useState('');
   const [burnInput,   setBurnInput]   = useState('');
   const [mintTxHash,  setMintTxHash]  = useState<`0x${string}` | undefined>();
+
+  // Add CivUSD to MetaMask
+  const addToMetaMask = async () => {
+    try {
+      const { ethereum } = window as any;
+      if (!ethereum) return;
+      await ethereum.request({
+        method: 'wallet_watchAsset',
+        params: {
+          type: 'ERC20',
+          options: {
+            address:  CONTRACTS.CivUSD,
+            symbol:   'CivUSD',
+            decimals: 18,
+            image:    'https://civyx-reputation-powered-de-fi-on-p.vercel.app/civusd-icon.png',
+          },
+        },
+      });
+    } catch (e) {
+      console.error('wallet_watchAsset failed', e);
+    }
+  };
   const [burnTxHash,  setBurnTxHash]  = useState<`0x${string}` | undefined>();
   const [error,       setError]       = useState('');
 
   // Contract reads
-  const { data: debt, refetch: refetchDebt } = useReadContract({
-    address: CONTRACTS.CivUSD as `0x${string}`,
-    abi: CIVUSD_ABI,
-    functionName: 'debtOf',
-    args: [address!],
-    query: { enabled: !!address },
-  });
-
-  const { data: collateral, refetch: refetchCol } = useReadContract({
-    address: CONTRACTS.CivUSD as `0x${string}`,
-    abi: CIVUSD_ABI,
-    functionName: 'collateralOf',
-    args: [address!],
-    query: { enabled: !!address },
+  const { data: position, refetch: refetchPos } = useReadContract({
+    address:      CONTRACTS.CivUSD as `0x${string}`,
+    abi:          CIVUSD_ABI,
+    functionName: 'getPosition',
+    args:         [address!],
+    query:        { enabled: !!address },
   });
 
   const { data: ratio } = useReadContract({
@@ -235,11 +247,7 @@ export default function CivUSDPage() {
   useEffect(() => { if (burnErr) setError(burnErr.message?.slice(0, 140) ?? 'Burn failed'); }, [burnErr]);
   useEffect(() => {
     if (mintSuccess || burnSuccess) {
-      refetchDebt();
-      refetchCol();
-      refetchBal();
-      setCollInput('');
-      setBurnInput('');
+      refetchPos(); refetchBal(); setCollInput(''); setBurnInput('');
     }
   }, [mintSuccess, burnSuccess]);
 
@@ -275,8 +283,9 @@ export default function CivUSDPage() {
   const currentRatio     = ratio ? Number(ratio as bigint) : 180;
   const tierIdx          = getTierIndex(currentRatio);
   const tier             = TIERS[tierIdx];
-  const lockedCollateral = (collateral as bigint) ?? 0n;
-  const mintedAmount     = (debt as bigint) ?? 0n;
+  const pos              = position as [bigint, bigint, bigint, bigint] | undefined;
+  const lockedCollateral = pos?.[0] ?? 0n;
+  const mintedAmount     = pos?.[1] ?? 0n;
   const hasPosition      = mintedAmount > 0n;
   const quoteArr         = quote as [bigint, bigint, bigint] | undefined;
   const pasPriceNum      = pasPrice ? Number(pasPrice as bigint) / 1e8 : 0.05;
@@ -294,6 +303,24 @@ export default function CivUSDPage() {
               className="text-xs text-gray-400 hover:text-green-600 font-mono transition-colors">
               {CONTRACTS.CivUSD.slice(0,10)}…{CONTRACTS.CivUSD.slice(-6)} ↗
             </a>
+            <button
+              onClick={addToMetaMask}
+              title="Add CivUSD to MetaMask"
+              className="w-7 h-7 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 shrink-0"
+              style={{ background: 'linear-gradient(135deg, #16a34a, #0d9488)' }}
+            >
+              {/* MetaMask fox simplified SVG */}
+              <svg width="15" height="15" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M27.6 2L17.6 9.4L19.5 5.2L27.6 2Z" fill="#E17726"/>
+                <path d="M4.4 2L14.3 9.5L12.5 5.2L4.4 2Z" fill="#E27625"/>
+                <path d="M23.9 21.4L21.2 25.5L27 27.1L28.7 21.5L23.9 21.4Z" fill="#E27625"/>
+                <path d="M3.3 21.5L5 27.1L10.8 25.5L8.1 21.4L3.3 21.5Z" fill="#E27625"/>
+                <path d="M10.5 14L8.8 16.6L14.5 16.9L14.3 10.8L10.5 14Z" fill="#E27625"/>
+                <path d="M21.5 14L17.6 10.7L17.5 16.9L23.2 16.6L21.5 14Z" fill="#E27625"/>
+                <path d="M10.8 25.5L14.1 23.8L11.3 21.5L10.8 25.5Z" fill="#E27625"/>
+                <path d="M17.9 23.8L21.2 25.5L20.7 21.5L17.9 23.8Z" fill="#E27625"/>
+              </svg>
+            </button>
           </div>
           <h1 className="text-2xl font-semibold text-gray-900">CivUSD</h1>
           <p className="text-sm text-gray-500 mt-1 leading-relaxed">
